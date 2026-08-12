@@ -1,0 +1,12 @@
+ROTA PRÓXIMA - ACESSO EXTERNO
+
+1. Primeiro execute INICIAR_ROTA_PROXIMA.bat e deixe o servidor aberto.
+2. Depois execute INICIAR_ACESSO_EXTERNO.bat.
+3. Na primeira vez ele baixa cloudflared.exe oficial automaticamente.
+4. Aguarde aparecer um endereço HTTPS terminado em .trycloudflare.com.
+5. Abra esse endereço no celular usando 4G/5G.
+
+Observação:
+O endereço Quick Tunnel é temporário e muda quando o cloudflared é reiniciado.
+Para uso definitivo, depois configure um Named Tunnel com domínio fixo.
+
