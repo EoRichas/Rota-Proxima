@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: rota-proxima
+    runtime: python
+    plan: free
+    region: virginia
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: FORCE_SECURE_COOKIES
+        value: "true"
