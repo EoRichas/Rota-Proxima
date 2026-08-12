@@ -147,8 +147,8 @@ function renderNav() {
   let items=[];
   if (state.user.role === 'driver') items=[['driver','Minha rota'],['history','Histórico']];
   else if (state.user.role === 'commercial') items=[['requests','Solicitações'],['pevs','PEVs / Locais']];
-  else if (state.user.role === 'commercial_manager') items=[['dashboard','Dashboard'],['routes','Rotas'],['requests','Solicitações'],['pevs','PEVs / Locais']];
-  else items=[['dashboard','Dashboard'],['requests','Solicitações'],['planner','Planejar rota'],['pevs','PEVs / Locais'],['routes','Rotas'],['templates','Recorrentes'],['users','Usuários'],['activities','Atividades'],['settings','Configurações']];
+  else if (state.user.role === 'commercial_manager') items=[['dashboard','Dashboard'],['routes','Rotas'],['requests','Solicitações'],['reports','Relatório de coletas'],['pevs','PEVs / Locais']];
+  else items=[['dashboard','Dashboard'],['requests','Solicitações'],['planner','Planejar rota'],['pevs','PEVs / Locais'],['routes','Rotas'],['templates','Recorrentes'],['users','Usuários'],['reports','Relatório de coletas'],['settings','Configurações']];
   $('#nav').innerHTML = items.map(([id,label]) => `<button data-page="${id}">${label}</button>`).join('');
   $$('#nav button').forEach(b => b.onclick = () => { $('#sidebar').classList.remove('open'); go(b.dataset.page); });
 }
@@ -165,7 +165,7 @@ async function go(page) {
     if (page === 'routes') return renderRoutes();
     if (page === 'templates') return renderTemplates();
     if (page === 'users') return renderUsers();
-    if (page === 'activities') return renderActivities();
+    if (page === 'reports') return renderCollectionReport();
     if (page === 'settings') return renderSettings();
     if (page === 'driver') return renderDriverHome();
     if (page === 'history') return renderHistory();
@@ -204,7 +204,7 @@ async function renderDashboard() {
 function routeListHtml(routes) {
   if (!routes.length) return `<div class="empty">Nenhuma rota encontrada.</div>`;
   return `<div class="list">${routes.map(r => {
-    const canDelete = state.user?.role === 'admin' && ['draft','finished','cancelled'].includes(r.status);
+    const canDelete = state.user?.role === 'admin';
     return `<div class="list-item">
     <div class="list-item-main"><strong>${esc(r.name)}</strong><span>${fmtDate(r.route_date)} • ${esc(r.driver_name)} • ${r.completed_stops}/${r.total_stops} paradas</span></div>
     <div class="actions"><span class="badge ${r.status}">${statusLabel[r.status]||r.status}</span><button class="btn ghost small open-route" data-id="${r.id}">Abrir</button>${canDelete?`<button class="btn danger small delete-route" data-id="${r.id}" data-name="${esc(r.name)}">Excluir</button>`:''}</div>
@@ -215,7 +215,7 @@ function bindRouteOpeners() {
   $$('.open-route').forEach(b => b.onclick = () => openRoute(Number(b.dataset.id)));
   $$('.delete-route').forEach(b => b.onclick = async () => {
     const id = Number(b.dataset.id);
-    if (!confirm(`Excluir a rota "${b.dataset.name}"? Esta ação não pode ser desfeita.`)) return;
+    if (!confirm(`Excluir DEFINITIVAMENTE a rota "${b.dataset.name}"?\n\nO Administrador possui permissão total. A rota e suas paradas serão apagadas. Esta ação não pode ser desfeita.`)) return;
     const reason=prompt('Informe o motivo da exclusão:','')?.trim(); if(!reason)return;
     try {
       await api(`/api/routes/${id}`, {method:'DELETE',body:{reason}});
@@ -233,16 +233,9 @@ async function renderPevs() {
     <div class="card"><div class="toolbar"><input id="pevSearch" class="search" placeholder="Pesquisar nome, bairro, cidade ou responsável"><select id="pevFilter"><option value="all">Todos</option><option value="favorite">Favoritos</option></select></div><div id="pevList"></div></div>`;
   if ($('#addPev')) $('#addPev').onclick = () => openPevModal();
   if ($('#geocodeMissingPevs')) $('#geocodeMissingPevs').onclick = async () => {
-    const btn=$('#geocodeMissingPevs');
-    if(!confirm('Localizar automaticamente as PEVs que ainda estão sem latitude/longitude?\n\nO sistema usa endereço completo no OpenStreetMap/Nominatim e, se necessário, o CEP pela BrasilAPI.')) return;
-    const oldText=btn.textContent;btn.disabled=true;btn.textContent='Localizando...';
-    try{
-      const r=await api('/api/pevs/geocode-missing',{method:'POST',body:{}});
-      const falhas=(r.failed||[]).length;
-      toast(`${(r.updated||[]).length} PEV(s) atualizada(s)${falhas?` • ${falhas} não localizada(s)`:''}.`,falhas?'error':'success');
-      await renderPevs();
-    }catch(e){toast(e.message,'error');}
-    finally{if(btn && document.body.contains(btn)){btn.disabled=false;btn.textContent=oldText;}}
+    const btn=$('#geocodeMissingPevs');if(!confirm('Atualizar automaticamente as coordenadas e tentar confirmar as PEVs que ainda estão sem localização confirmada?'))return;
+    const old=btn.textContent;btn.disabled=true;btn.textContent='Localizando...';
+    try{const r=await api('/api/pevs/geocode-missing',{method:'POST',body:{}});const f=(r.failed||[]).length;toast(`${(r.updated||[]).length} PEV(s) atualizada(s)${f?` • ${f} não localizada(s)`:''}.`,f?'error':'success');await renderPevs();}catch(e){toast(e.message,'error')}finally{if(document.body.contains(btn)){btn.disabled=false;btn.textContent=old;}}
   };
   if ($('#pevTrash')) $('#pevTrash').onclick = openPevTrash;
   $('#pevSearch').oninput = drawPevList; $('#pevFilter').onchange = drawPevList;
@@ -256,10 +249,11 @@ function drawPevList() {
   $('#pevList').innerHTML = items.length ? `<div class="list">${items.map(p=>`
     <div class="list-item">
       <div class="list-item-main"><strong>${p.favorite?'<span class="favorite">★</span> ':''}${esc(p.name)}</strong><span>${esc(p.street)}, ${esc(p.number||'s/n')} • ${esc(p.city)}/${esc(p.state)}</span><span>${p.contact_name ? `Responsável: ${esc(p.contact_name)}${p.phone?` • ${esc(p.phone)}`:''}` : 'Responsável não informado'}</span></div>
-      <div class="actions">${!p.location_confirmed?'<span class="badge high">Localização não confirmada</span>':''}<span class="badge ${p.default_priority}">${priorityLabel[p.default_priority]}</span>${state.user.role==='commercial'?`<button class="btn secondary small request-pev" data-id="${p.id}">Solicitar</button>`:''}${['admin','commercial'].includes(state.user.role)?`<button class="btn ghost small edit-pev" data-id="${p.id}">Editar</button><button class="btn danger small delete-pev" data-id="${p.id}" data-name="${esc(p.name)}">Excluir</button>`:''}</div>
+      <div class="actions">${!p.location_confirmed?'<span class="badge high">Localização não confirmada</span>':''}${state.user.role==='admin'&&!p.location_confirmed&&p.lat!=null&&p.lng!=null?`<button class="btn secondary small confirm-location" data-id="${p.id}">Confirmar localização</button>`:''}<span class="badge ${p.default_priority}">${priorityLabel[p.default_priority]}</span>${state.user.role==='commercial'?`<button class="btn secondary small request-pev" data-id="${p.id}">Solicitar</button>`:''}${['admin','commercial'].includes(state.user.role)?`<button class="btn ghost small edit-pev" data-id="${p.id}">Editar</button><button class="btn danger small delete-pev" data-id="${p.id}" data-name="${esc(p.name)}">Excluir</button>`:''}</div>
     </div>`).join('')}</div>` : `<div class="empty">Nenhum PEV encontrado.</div>`;
   $$('.edit-pev').forEach(b => b.onclick = () => openPevModal(state.pevs.find(p => p.id === Number(b.dataset.id))));
   $$('.request-pev').forEach(b => b.onclick = () => openRequestModal(state.pevs.find(p => p.id === Number(b.dataset.id))));
+  $$('.confirm-location').forEach(b=>b.onclick=async()=>{if(!confirm('Confirmar manualmente que a localização desta PEV está correta?'))return;try{await api(`/api/pevs/${b.dataset.id}/confirm-location`,{method:'POST',body:{}});toast('Localização confirmada.','success');renderPevs();}catch(e){toast(e.message,'error')}});
   $$('.delete-pev').forEach(b => b.onclick = async () => {
     const name=b.dataset.name||'este PEV';
     if(!confirm(`Excluir ${name}?\n\nEle será enviado para a lixeira. Rotas e solicitações antigas continuarão preservadas.`)) return;
@@ -336,16 +330,17 @@ function openPevModal(pev=null) {
     body.whatsapp=body.whatsapp==='1'; body.favorite=body.favorite==='1';
     body.service_start=body.service_start||null; body.service_end=body.service_end||null;
     body.lat=body.lat||null; body.lng=body.lng||null;
-    try { const r=await api(pev?`/api/pevs/${pev.id}`:'/api/pevs',{method:pev?'PUT':'POST',body}); $('#modal').close(); toast(r.geocode_warning?'PEV salvo. Coordenadas serão tentadas novamente ao planejar a rota.':'PEV salvo.','success'); renderPevs(); } catch(err){toast(err.message,'error');}
+    try { const r=await api(pev?`/api/pevs/${pev.id}`:'/api/pevs',{method:pev?'PUT':'POST',body}); $('#modal').close(); toast(r.geocode?.confirmed?'PEV salvo e localização confirmada automaticamente.':'PEV salvo.','success'); renderPevs(); } catch(err){toast(err.message,'error');}
   };
 }
 async function renderRequests(){
   [state.requests,state.pevs]=await Promise.all([api('/api/requests').then(x=>x.items),api('/api/pevs').then(x=>x.items)]);
   const admin=state.user.role==='admin';
   const commercial=state.user.role==='commercial';
+  const manager=state.user.role==='commercial_manager';
   const pending=state.requests.filter(r=>r.status==='pending').length;
   const waiting=state.requests.filter(r=>r.status==='pending').length;
-  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Comercial</span><h1>Solicitações de agendamento</h1><p class="muted">O Comercial cria as solicitações. O Administrador usa as solicitações no planejamento das rotas. O Gerente Comercial acompanha em modo consulta.</p></div><div class="page-head-actions">${commercial?'<button id="newRequest" class="btn primary">+ Nova solicitação</button>':''}${admin?'<button id="planSelectedRequests" class="btn success">Planejar selecionadas</button>':''}</div></div>
+  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Comercial</span><h1>Solicitações de agendamento</h1><p class="muted">O Comercial cria as solicitações. O Administrador usa as solicitações no planejamento das rotas. Comercial e Gerente Comercial podem excluir solicitações ainda não vinculadas a uma rota.</p></div><div class="page-head-actions">${commercial?'<button id="newRequest" class="btn primary">+ Nova solicitação</button>':''}${admin?'<button id="planSelectedRequests" class="btn success">Planejar selecionadas</button>':''}</div></div>
     <div class="grid stats" style="margin-bottom:16px"><div class="card stat-card"><span>Pendentes</span><strong>${pending}</strong></div><div class="card stat-card"><span>Aguardando rota</span><strong>${waiting}</strong></div><div class="card stat-card"><span>Em rota</span><strong>${state.requests.filter(r=>r.status==='scheduled').length}</strong></div><div class="card stat-card"><span>Concluídas</span><strong>${state.requests.filter(r=>r.status==='completed').length}</strong></div></div>
     <div class="card"><div class="toolbar"><input id="requestSearch" class="search" placeholder="Pesquisar PEV, comercial ou cidade"><select id="requestFilter"><option value="active">Ativas</option><option value="pending">Pendentes</option><option value="scheduled">Em rota</option><option value="completed">Concluídas</option><option value="all">Todas</option></select></div><div id="requestList"></div></div>`;
   if(commercial)$('#newRequest').onclick=()=>openRequestModal();
@@ -357,6 +352,7 @@ async function renderRequests(){
 function drawRequestList(){
   const admin=state.user.role==='admin';
   const commercial=state.user.role==='commercial';
+  const manager=state.user.role==='commercial_manager';
   const q=($('#requestSearch')?.value||'').toLowerCase(); const filter=$('#requestFilter')?.value||'active';
   const items=state.requests.filter(r=>{
     const match=`${r.pev_name} ${r.requested_by_name} ${r.city} ${r.notes||''}`.toLowerCase().includes(q);
@@ -366,9 +362,9 @@ function drawRequestList(){
   $('#requestList').innerHTML=items.length?`<div class="list">${items.map(r=>`<div class="list-item request-item">
     ${admin&&r.status==='pending'?`<input class="request-select" type="checkbox" value="${r.id}" style="width:18px;height:18px">`:''}
     <div class="list-item-main"><strong>${esc(r.pev_name)}</strong><span>${fmtDate(r.requested_date)}${r.exact_time?` • ⏰ ${esc(r.exact_time)}`:(r.window_start||r.window_end?` • ${esc(r.window_start||'—')}–${esc(r.window_end||'—')}`:'')} • ${esc(r.city)}/${esc(r.state)}</span><span>Solicitado por: ${esc(r.requested_by_name)}${r.notes?` • ${esc(r.notes)}`:''}</span></div>
-    <div class="actions"><span class="badge ${r.status}">${requestStatusLabel[r.status]||r.status}</span><span class="badge ${r.priority}">${priorityLabel[r.priority]}</span>${commercial&&r.status==='pending'?`<button class="btn danger small cancel-request" data-id="${r.id}">Cancelar</button>`:''}</div>
+    <div class="actions"><span class="badge ${r.status}">${requestStatusLabel[r.status]||r.status}</span><span class="badge ${r.priority}">${priorityLabel[r.priority]}</span>${(admin||((manager||commercial)&&!r.route_id&&r.status==='pending'))?`<button class="btn danger small delete-request" data-id="${r.id}">Excluir</button>`:''}</div>
   </div>`).join('')}</div>`:'<div class="empty">Nenhuma solicitação encontrada.</div>';
-  $$('.cancel-request').forEach(b=>b.onclick=async()=>{if(!confirm('Cancelar esta solicitação?'))return;const reason=prompt('Informe o motivo do cancelamento:','')?.trim();if(!reason)return;try{await api(`/api/requests/${b.dataset.id}`,{method:'DELETE',body:{reason}});toast('Solicitação cancelada.','success');renderRequests();}catch(e){toast(e.message,'error');}});
+  $$('.delete-request').forEach(b=>b.onclick=async()=>{if(!confirm('Excluir definitivamente esta solicitação?\n\nO Administrador pode excluir mesmo quando ela já fez parte da operação. Esta ação não pode ser desfeita.'))return;try{await api(`/api/requests/${b.dataset.id}`,{method:'DELETE',body:{}});toast('Solicitação excluída.','success');renderRequests();}catch(e){toast(e.message,'error');}});
 }
 
 function planSelectedRequests(){
@@ -509,14 +505,14 @@ async function openRoute(id) {
   try {
     const r=await api(`/api/routes/${id}`);
     const canRelease=state.user.role==='admin'&&r.status==='draft';
-    const canDelete=state.user.role==='admin'&&['draft','finished','cancelled'].includes(r.status);
+    const canDelete=state.user.role==='admin';
     const dlg=modal(`<div class="modal-box"><div class="modal-head"><div><span class="eyebrow">Rota #${r.id}</span><h2>${esc(r.name)}</h2><p class="muted">${fmtDate(r.route_date)} • ${esc(r.driver_name)}</p></div><button class="icon-btn modal-close">×</button></div>
       <div class="summary-strip"><div class="summary-box"><span>Status</span><strong>${statusLabel[r.status]}</strong></div><div class="summary-box"><span>Distância</span><strong>${fmtKm(r.total_distance_m)}</strong></div><div class="summary-box"><span>Tempo estimado</span><strong>${fmtDuration(r.total_duration_s)}</strong></div></div>
       <div class="route-preview">${r.stops.map(s=>`<div class="route-stop"><div class="stop-number">${s.sequence}</div><div><strong>${esc(s.pev_name)}</strong><div class="stop-meta">${esc(s.street)}, ${esc(s.number||'s/n')} • ${esc(s.city)}/${esc(s.state)}${s.contact_name?`<br>Responsável: ${esc(s.contact_name)} ${s.phone?`• ${esc(s.phone)}`:''}`:''}${s.exact_time?`<br><strong>Horário específico: ${esc(s.exact_time)}</strong>`:''}</div></div><span class="badge ${s.status==='failed'?'failed':s.priority}">${s.status==='completed'?'Concluída':s.status==='failed'?'Não realizada':priorityLabel[s.priority]}</span></div>`).join('')}</div>
       ${r.schedule_warnings?.length?`<div class="warning"><strong>Atenção ao horário</strong><br>${r.schedule_warnings.map(esc).join('<br>')}</div>`:''}${r.started_at?`<div class="info">Início: ${fmtDateTime(r.started_at)}${r.finished_at?` • Fim: ${fmtDateTime(r.finished_at)}`:''}</div>`:''}
       <div class="form-actions"><button class="btn ghost modal-close">Fechar</button>${canDelete?'<button id="deleteRoute" class="btn danger">Excluir rota</button>':''}${canRelease?'<button id="releaseRoute" class="btn success">Liberar para motorista</button>':''}</div></div>`);
     if(canDelete)$('#deleteRoute').onclick=async()=>{
-      if(!confirm(`Excluir a rota "${r.name}"? Esta ação não pode ser desfeita.`))return;
+      if(!confirm(`Excluir DEFINITIVAMENTE a rota "${r.name}"?\n\nA rota pode estar liberada, em andamento ou finalizada. Esta ação não pode ser desfeita.`))return;
       const reason=prompt('Informe o motivo da exclusão:','')?.trim();if(!reason)return;
       try{await api(`/api/routes/${r.id}`,{method:'DELETE',body:{reason}});toast('Rota excluída.','success');dlg.close();go(state.page);}catch(e){toast(e.message,'error');}
     };
@@ -547,7 +543,7 @@ function drawUsers(){
   $$('.edit-user').forEach(b=>b.onclick=()=>openEditUser(state.users.find(x=>x.id===b.dataset.id)));
   $$('.reset-user').forEach(b=>b.onclick=()=>resetUserPassword(b.dataset.id));
   $$('.toggle-user').forEach(b=>b.onclick=async()=>{const active=b.dataset.active==='1';if(!confirm(`${active?'Desativar':'Reativar'} este usuário?`))return;try{await api(`/api/users/${b.dataset.id}`,{method:'PUT',body:{active:!active}});toast(active?'Usuário desativado.':'Usuário reativado.','success');renderUsers();}catch(e){toast(e.message,'error')}});
-  $$('.delete-user').forEach(b=>b.onclick=async()=>{if(!confirm('Excluir definitivamente este usuário? Isso só será permitido se ele não possuir histórico.'))return;try{await api(`/api/users/${b.dataset.id}`,{method:'DELETE'});toast('Usuário excluído.','success');renderUsers();}catch(e){toast(e.message,'error')}});
+  $$('.delete-user').forEach(b=>b.onclick=async()=>{if(!confirm('Excluir DEFINITIVAMENTE este usuário?\n\nO histórico operacional será preservado, mas o usuário perderá acesso imediatamente. Esta ação não pode ser desfeita.'))return;try{await api(`/api/users/${b.dataset.id}`,{method:'DELETE'});toast('Usuário excluído.','success');renderUsers();}catch(e){toast(e.message,'error')}});
 }
 function openUserModal(){
   modal(`<form id="userForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Acesso</span><h2>Novo usuário</h2></div><button type="button" class="icon-btn modal-close">×</button></div><div class="form-grid"><label class="field"><span>Nome</span><input name="name" required></label><label class="field"><span>Usuário</span><input name="username" minlength="3" required></label><label class="field"><span>Senha inicial</span><input name="password" type="password" minlength="8" required><small class="muted">No primeiro acesso o usuário deverá trocar a senha.</small></label><label class="field"><span>Telefone</span><input name="phone" placeholder="(15) 99999-9999"></label><label class="field"><span>Perfil</span><select name="role"><option value="commercial">Comercial</option><option value="commercial_manager">Gerente Comercial</option><option value="driver">Motorista</option><option value="admin">Administrador</option></select></label></div><div class="form-actions"><button type="button" class="btn ghost modal-close">Cancelar</button><button class="btn primary">Criar usuário</button></div></form>`);
@@ -562,13 +558,51 @@ function resetUserPassword(id){
   $('#resetPasswordForm').onsubmit=async e=>{e.preventDefault();try{await api(`/api/users/${id}/reset-password`,{method:'POST',body:{password:new FormData(e.target).get('password')}});$('#modal').close();toast('Senha redefinida.','success');renderUsers();}catch(err){toast(err.message,'error')}};
 }
 
-async function renderActivities(){
-  if(state.user.role!=='admin')return go('dashboard');
-  const items=(await api('/api/audit')).items;
-  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Auditoria</span><h1>Histórico de atividades</h1><p class="muted">Registro automático das principais alterações no sistema.</p></div></div><div class="card"><div class="toolbar"><input id="auditSearch" class="search" placeholder="Pesquisar usuário, ação ou módulo"><select id="auditType"><option value="all">Todos os módulos</option>${[...new Set(items.map(x=>x.entity_type))].sort().map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select></div><div id="auditList"></div></div>`;
-  function draw(){const q=($('#auditSearch').value||'').toLowerCase(),tp=$('#auditType').value;const xs=items.filter(x=>(tp==='all'||x.entity_type===tp)&&`${x.actor_name} ${x.action} ${x.entity_type} ${x.summary}`.toLowerCase().includes(q));$('#auditList').innerHTML=xs.length?`<div class="list">${xs.map(x=>`<div class="list-item"><div class="list-item-main"><strong>${esc(x.actor_name||'Sistema')} • ${esc(x.summary||x.action)}</strong><span>${fmtDateTime(x.created_at)} • ${esc(x.entity_type)} #${esc(x.entity_id||'—')}</span>${x.metadata&&Object.keys(x.metadata).length?`<span>${esc(JSON.stringify(x.metadata))}</span>`:''}</div></div>`).join('')}</div>`:'<div class="empty">Nenhum registro encontrado.</div>';}
-  $('#auditSearch').oninput=draw;$('#auditType').onchange=draw;draw();
+async function renderCollectionReport(){
+  if(!['admin','commercial_manager'].includes(state.user.role)) return go(state.user.role==='commercial'?'requests':'dashboard');
+  const now=new Date();
+  const y=now.getFullYear(),m=String(now.getMonth()+1).padStart(2,'0'),d=String(now.getDate()).padStart(2,'0');
+  const today=`${y}-${m}-${d}`,monthStart=`${y}-${m}-01`;
+  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Operação</span><h1>Relatório de coletas</h1><p class="muted">Acompanhe as paradas realizadas, não realizadas e pendentes por período.</p></div><div class="page-head-actions"><button id="exportCollections" class="btn secondary">Exportar CSV</button></div></div>
+    <div class="card"><div class="toolbar report-toolbar"><label class="field compact"><span>De</span><input id="reportFrom" type="date" value="${monthStart}"></label><label class="field compact"><span>Até</span><input id="reportTo" type="date" value="${today}"></label><label class="field compact"><span>Status</span><select id="reportStatus"><option value="all">Todos</option><option value="completed">Realizadas</option><option value="failed">Não realizadas</option><option value="pending">Pendentes</option><option value="arrived">No local</option><option value="skipped">Puladas</option></select></label><label class="field compact"><span>Motorista</span><select id="reportDriver"><option value="all">Todos</option></select></label><label class="field compact report-search"><span>Pesquisar</span><input id="reportSearch" class="search" placeholder="PEV, cidade, rota ou motorista"></label><button id="loadCollectionsReport" class="btn primary">Atualizar</button></div></div>
+    <div id="collectionReportContent"><div class="empty">Carregando relatório...</div></div>`;
+
+  let raw=[];
+  const load=async()=>{
+    const from=$('#reportFrom').value,to=$('#reportTo').value;
+    if(!from||!to)return toast('Informe o período.','error');
+    $('#collectionReportContent').innerHTML='<div class="empty">Carregando relatório...</div>';
+    try{
+      raw=(await api(`/api/reports/collections?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)).items||[];
+      const current=$('#reportDriver').value;
+      const drivers=[...new Map(raw.filter(x=>x.driver_id).map(x=>[String(x.driver_id),x.driver_name||'Motorista'])).entries()].sort((a,b)=>a[1].localeCompare(b[1],'pt-BR'));
+      $('#reportDriver').innerHTML='<option value="all">Todos</option>'+drivers.map(([id,name])=>`<option value="${esc(id)}">${esc(name)}</option>`).join('');
+      if(drivers.some(([id])=>id===current))$('#reportDriver').value=current;
+      draw();
+    }catch(e){$('#collectionReportContent').innerHTML=`<div class="warning">${esc(e.message)}</div>`;}
+  };
+  const filtered=()=>{
+    const status=$('#reportStatus').value,driver=$('#reportDriver').value,q=($('#reportSearch').value||'').trim().toLowerCase();
+    return raw.filter(x=>(status==='all'||x.status===status)&&(driver==='all'||String(x.driver_id)===driver)&&`${x.pev_name} ${x.city} ${x.route_name} ${x.driver_name} ${x.requested_by_name||''} ${x.failure_reason||''}`.toLowerCase().includes(q));
+  };
+  const draw=()=>{
+    const items=filtered();
+    const completed=items.filter(x=>x.status==='completed').length,failed=items.filter(x=>['failed','skipped'].includes(x.status)).length,open=items.filter(x=>['pending','arrived'].includes(x.status)).length;
+    const rate=items.length?Math.round((completed/items.length)*100):0;
+    $('#collectionReportContent').innerHTML=`<div class="grid stats" style="margin:16px 0"><div class="card stat-card"><span>Total de paradas</span><strong>${items.length}</strong></div><div class="card stat-card"><span>Realizadas</span><strong>${completed}</strong></div><div class="card stat-card"><span>Não realizadas</span><strong>${failed}</strong></div><div class="card stat-card"><span>Em aberto</span><strong>${open}</strong></div></div><div class="card"><div class="report-summary"><strong>Taxa de realização: ${rate}%</strong></div>${items.length?`<div class="list">${items.map(x=>`<div class="list-item"><div class="list-item-main"><strong>${esc(x.pev_name||'PEV')} • ${fmtDate(x.route_date)}</strong><span>${esc(x.route_name||'Rota')} • ${esc(x.driver_name||'—')} • ${esc(x.city||'')}/${esc(x.state||'')}</span><span>${x.completed_at?`Concluída: ${fmtDateTime(x.completed_at)}`:x.arrived_at?`Chegada: ${fmtDateTime(x.arrived_at)}`:'Sem horário registrado'}${x.requested_by_name?` • Comercial: ${esc(x.requested_by_name)}`:''}${x.failure_reason?` • Motivo: ${esc(x.failure_reason)}`:''}${x.driver_note?` • Obs.: ${esc(x.driver_note)}`:''}</span></div><div class="actions"><span class="badge ${x.status}">${x.status==='completed'?'Realizada':x.status==='failed'?'Não realizada':x.status==='arrived'?'No local':x.status==='skipped'?'Pulada':'Pendente'}</span></div></div>`).join('')}</div>`:'<div class="empty">Nenhuma coleta encontrada para os filtros selecionados.</div>'}</div>`;
+  };
+  const csv=()=>{
+    const items=filtered();
+    if(!items.length)return toast('Não há dados para exportar.','error');
+    const cols=[['Data','route_date'],['Rota','route_name'],['Motorista','driver_name'],['PEV','pev_name'],['Cidade','city'],['UF','state'],['Status','status'],['Chegada','arrived_at'],['Conclusão','completed_at'],['Comercial','requested_by_name'],['Motivo','failure_reason'],['Observação','driver_note']];
+    const cell=v=>`"${String(v??'').replace(/"/g,'""')}"`;
+    const lines=[cols.map(c=>cell(c[0])).join(';'),...items.map(x=>cols.map(([_,k])=>cell(k==='route_date'?fmtDate(x[k]):['arrived_at','completed_at'].includes(k)&&x[k]?fmtDateTime(x[k]):k==='status'?(x[k]==='completed'?'Realizada':x[k]==='failed'?'Não realizada':x[k]==='arrived'?'No local':x[k]==='skipped'?'Pulada':'Pendente'):x[k])).join(';'))];
+    const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`relatorio-coletas-${$('#reportFrom').value}-a-${$('#reportTo').value}.csv`;a.click();URL.revokeObjectURL(a.href);
+  };
+  $('#loadCollectionsReport').onclick=load;$('#reportStatus').onchange=draw;$('#reportDriver').onchange=draw;$('#reportSearch').oninput=draw;$('#exportCollections').onclick=csv;
+  await load();
 }
+
 function openPasswordModal(forced=false){
   const dlg=modal(`<form id="myPasswordForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Segurança</span><h2>${forced?'Troca obrigatória de senha':'Alterar minha senha'}</h2></div>${forced?'':'<button type="button" class="icon-btn modal-close">×</button>'}</div><label class="field"><span>Senha atual</span><input name="current_password" type="password" required></label><label class="field" style="margin-top:12px"><span>Nova senha</span><input name="new_password" type="password" minlength="8" required></label><label class="field" style="margin-top:12px"><span>Confirmar nova senha</span><input name="confirm_password" type="password" minlength="8" required></label>${forced?'<div class="warning" style="margin-top:12px">Sua senha foi criada ou redefinida pelo Administrador. Para continuar, defina uma senha pessoal.</div>':''}<div class="form-actions">${forced?'':'<button type="button" class="btn ghost modal-close">Cancelar</button>'}<button class="btn primary">Salvar nova senha</button></div></form>`);
   if(forced)dlg.addEventListener('cancel',e=>e.preventDefault(),{once:true});

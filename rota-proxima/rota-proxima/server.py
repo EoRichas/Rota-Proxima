@@ -21,7 +21,7 @@ AUTH=f'{SUPABASE_URL}/auth/v1'
 ADMIN_FN=f'{SUPABASE_URL}/functions/v1/rota-admin'
 USER_AGENT='RotaProxima/3.0'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
-BUILD_ID='SP-RENDER-FREE-GEOCODE-2026-08-12'
+BUILD_ID='SP-RENDER-COMPLETE-2026-08-12'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -100,7 +100,7 @@ def _brasilapi_cep_coords(cep):
     except Exception:pass
     return None
 
-def geocode_address(addr):
+def geocode_address_detailed(addr):
     key='|'.join(str(addr.get(k,'') or '').strip().lower() for k in ('street','number','district','city','state','cep'))
     now=time.monotonic()
     with _GEO_CACHE_LOCK:
@@ -108,33 +108,26 @@ def geocode_address(addr):
         if cached and cached[0]>now:return cached[1]
     precise=', '.join(x for x in [f"{addr.get('street','')} {addr.get('number','')}".strip(),addr.get('district',''),addr.get('city',''),addr.get('state',''),clean_cep(addr.get('cep','')),'Brasil'] if x)
     generic=', '.join(x for x in [addr.get('street',''),addr.get('district',''),addr.get('city',''),addr.get('state',''),clean_cep(addr.get('cep','')),'Brasil'] if x)
-    result=None
-    try: result=_nominatim_search(precise)
+    result=None;source=None;confirmed=False
+    try:
+        result=_nominatim_search(precise)
+        if result is not None: source='nominatim_address'; confirmed=bool(addr.get('street') and addr.get('number') and addr.get('city'))
     except Exception: result=None
     if result is None and generic!=precise:
-        try: result=_nominatim_search(generic)
+        try:
+            result=_nominatim_search(generic)
+            if result is not None: source='nominatim_street'; confirmed=False
         except Exception: result=None
-    # Último recurso: CEP v2. É coordenada aproximada e por isso nunca é marcada
-    # como "confirmada" automaticamente; serve para não impedir a operação.
-    if result is None:result=_brasilapi_cep_coords(addr.get('cep'))
+    if result is None:
+        result=_brasilapi_cep_coords(addr.get('cep'))
+        if result is not None: source='brasilapi_cep'; confirmed=False
     if result is None:raise ValueError('Não foi possível localizar o endereço no mapa. Confirme latitude/longitude no cadastro da PEV.')
-    with _GEO_CACHE_LOCK:
-        _GEO_CACHE[key]=(now+_GEO_CACHE_TTL,result)
-    return result
+    payload={'lat':float(result[0]),'lng':float(result[1]),'source':source,'confirmed':confirmed}
+    with _GEO_CACHE_LOCK:_GEO_CACHE[key]=(now+_GEO_CACHE_TTL,payload)
+    return payload
 
-def geocode_pev_and_persist(token, pev, force=False):
-    """Localiza uma PEV com serviços gratuitos e persiste lat/lng no Supabase.
-
-    Fluxo: endereço completo no Nominatim/OpenStreetMap -> endereço genérico ->
-    coordenada aproximada do CEP via BrasilAPI v2. Coordenadas manuais existentes
-    são preservadas, a menos que force=True.
-    """
-    if not force and pev.get('lat') is not None and pev.get('lng') is not None:
-        return {'id':pev.get('id'),'lat':float(pev['lat']),'lng':float(pev['lng']),'updated':False}
-    lat,lng=geocode_address(pev)
-    Supa.update('pevs',token,{'id':f'eq.{pev["id"]}'},{'lat':lat,'lng':lng})
-    pev['lat']=lat;pev['lng']=lng
-    return {'id':pev.get('id'),'lat':lat,'lng':lng,'updated':True}
+def geocode_address(addr):
+    d=geocode_address_detailed(addr);return d['lat'],d['lng']
 
 def haversine(a,b):
     R=6371000; p=math.pi/180; la1,lo1=a[0]*p,a[1]*p; la2,lo2=b[0]*p,b[1]*p
@@ -265,9 +258,17 @@ def audit(token,user,action,entity_type,entity_id,summary,before=None,after=None
 
 def first(rows):return rows[0] if rows else None
 
+def geocode_pev_and_persist(token,pev,force=False):
+    if not force and pev.get('lat') is not None and pev.get('lng') is not None:
+        return {'id':pev.get('id'),'lat':float(pev['lat']),'lng':float(pev['lng']),'updated':False,'confirmed':bool(pev.get('location_confirmed')),'source':'existing'}
+    d=geocode_address_detailed(pev)
+    Supa.update('pevs',token,{'id':f'eq.{pev["id"]}'},{'lat':d['lat'],'lng':d['lng'],'location_confirmed':d['confirmed']})
+    pev['lat']=d['lat'];pev['lng']=d['lng'];pev['location_confirmed']=d['confirmed']
+    return {'id':pev.get('id'),'lat':d['lat'],'lng':d['lng'],'updated':True,'confirmed':d['confirmed'],'source':d['source']}
+
 def ensure_pev_coords(token,pev):
     if pev.get('lat') is not None and pev.get('lng') is not None:return float(pev['lat']),float(pev['lng'])
-    lat,lng=geocode_address(pev);Supa.update('pevs',token,{'id':f'eq.{pev["id"]}'},{'lat':lat,'lng':lng});pev['lat']=lat;pev['lng']=lng;return lat,lng
+    r=geocode_pev_and_persist(token,pev);return r['lat'],r['lng']
 
 def settings_origin(token):
     s=first(Supa.get('settings',token,{'id':'eq.1','select':'*'}))
@@ -483,6 +484,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 params={'select':'*,pevs(name,street,number,district,city,state,cep,contact_name,contact_role,phone),profiles!scheduling_requests_requested_by_fkey(name),routes(name)','order':'requested_date.asc,id.desc'}
                 if role=='commercial':params['requested_by']=f'eq.{u["id"]}'
                 if q.get('status'):params['status']=f'eq.{q["status"][0]}'
+                else:params['status']='neq.cancelled'
                 rows=Supa.get('scheduling_requests',t,params);items=[]
                 for x in rows:
                     p=x.pop('pevs',{}) or {};pr=x.pop('profiles',{}) or {};r=x.pop('routes',{}) or {};items.append({**x,**{k:p.get(k) for k in ['street','number','district','city','state','cep','contact_name','contact_role','phone']},'pev_name':p.get('name'),'requested_by_name':pr.get('name'),'route_name':r.get('name')})
@@ -509,11 +511,37 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not r:return self.send_json({'error':'Rota não encontrada'},404)
                 if role=='driver' and r['driver_id']!=u['id']:return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json(r)
-            if path=='/api/audit':
-                if role!='admin':return self.send_json({'error':'Sem permissão'},403)
-                rows=Supa.get('audit_logs',t,{'select':'*,profiles!audit_logs_actor_id_fkey(name,role)','order':'created_at.desc','limit':'500'});items=[]
-                for x in rows:
-                    p=x.pop('profiles',{}) or {};items.append({**x,'actor_name':p.get('name','Sistema'),'actor_role':p.get('role','')})
+            if path=='/api/reports/collections':
+                if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
+                date_from=(q.get('from') or [''])[0].strip();date_to=(q.get('to') or [''])[0].strip()
+                if not date_from or not date_to:return self.send_json({'error':'Informe o período do relatório'},400)
+                try:
+                    d1=datetime.strptime(date_from,'%Y-%m-%d').date();d2=datetime.strptime(date_to,'%Y-%m-%d').date()
+                except ValueError:return self.send_json({'error':'Período inválido'},400)
+                if d1>d2:return self.send_json({'error':'A data inicial não pode ser maior que a final'},400)
+                if (d2-d1).days>366:return self.send_json({'error':'O período máximo do relatório é de 367 dias'},400)
+                routes=Supa.get('routes',t,{
+                    'select':'id,name,route_date,status,driver_id,profiles!routes_driver_id_fkey(name)',
+                    'and':f'(route_date.gte.{date_from},route_date.lte.{date_to})',
+                    'order':'route_date.desc,id.desc'
+                })
+                if not routes:return self.send_json({'items':[]})
+                route_map={int(r['id']):r for r in routes};ids=','.join(str(x) for x in route_map)
+                stops=Supa.get('route_stops',t,{
+                    'route_id':f'in.({ids})',
+                    'select':'id,route_id,pev_id,request_id,sequence,status,exact_time,arrived_at,completed_at,failure_reason,driver_note,pevs(name,street,number,district,city,state,cep,contact_name,phone),scheduling_requests(requested_by,profiles!scheduling_requests_requested_by_fkey(name))',
+                    'order':'route_id.desc,sequence.asc'
+                })
+                items=[]
+                for st in stops:
+                    r=route_map.get(int(st['route_id'])) or {};drv=r.get('profiles') or {};pev=st.pop('pevs',{}) or {};req=st.pop('scheduling_requests',{}) or {};commercial=req.get('profiles') or {}
+                    items.append({
+                        **st,'route_name':r.get('name',''),'route_date':r.get('route_date'),'route_status':r.get('status'),
+                        'driver_id':r.get('driver_id'),'driver_name':drv.get('name',''),
+                        'pev_name':pev.get('name',''),'street':pev.get('street',''),'number':pev.get('number',''),'district':pev.get('district',''),
+                        'city':pev.get('city',''),'state':pev.get('state',''),'cep':pev.get('cep',''),'contact_name':pev.get('contact_name',''),'contact_phone':pev.get('phone',''),
+                        'requested_by_name':commercial.get('name','')
+                    })
                 return self.send_json({'items':items})
             if path in ('/api/dashboard','/api/dashboard-pending'):
                 if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
@@ -566,36 +594,37 @@ class AppHandler(BaseHTTPRequestHandler):
                         active=Supa.get('routes',t,{'driver_id':f'eq.{uid}','status':'eq.in_progress','select':'id'});
                         if active:return self.send_json({'error':'Este motorista possui rota em andamento'},409)
                     Supa.update('profiles',t,{'id':f'eq.{uid}'},upd);audit(t,u,'update','user',uid,'Usuário alterado',old,upd);return self.send_json({'ok':True})
-                if method=='DELETE':edge('delete-user',{'user_id':uid},t);return self.send_json({'ok':True})
+                if method=='DELETE':
+                    if role!='admin':return self.send_json({'error':'Sem permissão'},403)
+                    result=Supa.rpc('delete_user_force',t,{'p_user_id':uid});return self.send_json(result or {'ok':True})
             if path=='/api/pevs' and method=='POST':
                 if role not in ('admin','commercial'):return self.send_json({'error':'Sem permissão'},403)
+                if len(path.strip('/').split('/'))>3 and path.strip('/').split('/')[3]=='confirm-location' and method=='POST':
+                    if role!='admin':return self.send_json({'error':'Sem permissão'},403)
+                    row=first(Supa.get('pevs',t,{'id':f'eq.{pid}','select':'id,lat,lng'}));
+                    if not row or row.get('lat') is None or row.get('lng') is None:return self.send_json({'error':'PEV sem coordenadas para confirmar'},409)
+                    Supa.update('pevs',t,{'id':f'eq.{pid}'},{'location_confirmed':True});audit(t,u,'confirm_location','pev',pid,'Localização da PEV confirmada manualmente');return self.send_json({'ok':True})
                 # Defesa dupla: horários vazios viram None antes de chegar ao PostgreSQL.
                 pev_data=dict(data)
                 pev_data['service_start']=pev_data.get('service_start') or None
                 pev_data['service_end']=pev_data.get('service_end') or None
                 print(f'[PEV SAVE] build={BUILD_ID} via rpc/save_pev')
                 row=Supa.rpc('save_pev',t,{'p_id':None,'p_data':pev_data})
-                new_id=row.get('id') if isinstance(row,dict) else None
-                geocode_warning=None
+                new_id=row.get('id') if isinstance(row,dict) else None;geo=None
                 if new_id:
                     try:
-                        saved=first(Supa.get('pevs',t,{'id':f'eq.{new_id}','select':'*'}))
-                        if saved and (saved.get('lat') is None or saved.get('lng') is None):geocode_pev_and_persist(t,saved)
-                    except Exception as e:
-                        geocode_warning=str(e)
-                return self.send_json({'id':new_id,'geocode_warning':geocode_warning},201)
+                        saved=first(Supa.get('pevs',t,{'id':f'eq.{new_id}','select':'*'}));geo=geocode_pev_and_persist(t,saved) if saved else None
+                    except Exception as e: print('[PEV GEOCODE WARNING]',e)
+                return self.send_json({'id':new_id,'geocode':geo},201)
             if path=='/api/pevs/geocode-missing' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
-                rows=Supa.get('pevs',t,{'active':'eq.true','deleted_at':'is.null','select':'*','order':'id.asc'})
-                pending=[p for p in rows if p.get('lat') is None or p.get('lng') is None]
-                updated=[];failed=[]
-                for pev in pending:
-                    try:
-                        updated.append(geocode_pev_and_persist(t,pev))
-                    except Exception as e:
-                        failed.append({'id':pev.get('id'),'name':pev.get('name',''),'error':str(e)})
-                audit(t,u,'geocode','pev',None,'Coordenadas ausentes atualizadas automaticamente',None,None,{'updated':len(updated),'failed':len(failed)})
-                return self.send_json({'ok':True,'total_active':len(rows),'pending':len(pending),'updated':updated,'failed':failed})
+                rows=Supa.get('pevs',t,{'active':'eq.true','deleted_at':'is.null','select':'*','order':'id.asc'});updated=[];failed=[]
+                for pev in rows:
+                    if pev.get('lat') is not None and pev.get('lng') is not None and pev.get('location_confirmed'): continue
+                    try: updated.append(geocode_pev_and_persist(t,pev,force=True))
+                    except Exception as e: failed.append({'id':pev.get('id'),'name':pev.get('name',''),'error':str(e)})
+                audit(t,u,'geocode','pev',None,'Coordenadas/localizações pendentes atualizadas',None,None,{'updated':len(updated),'failed':len(failed)})
+                return self.send_json({'ok':True,'updated':updated,'failed':failed})
             if path.startswith('/api/pevs/'):
                 pid=int(path.strip('/').split('/')[2])
                 if role not in ('admin','commercial'):return self.send_json({'error':'Sem permissão'},403)
@@ -609,14 +638,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     pev_data['service_start']=pev_data.get('service_start') or None
                     pev_data['service_end']=pev_data.get('service_end') or None
                     print(f'[PEV SAVE] build={BUILD_ID} via rpc/save_pev update id={pid}')
-                    Supa.rpc('save_pev',t,{'p_id':pid,'p_data':pev_data})
-                    geocode_warning=None
+                    Supa.rpc('save_pev',t,{'p_id':pid,'p_data':pev_data});geo=None
                     try:
-                        saved=first(Supa.get('pevs',t,{'id':f'eq.{pid}','select':'*'}))
-                        if saved and (saved.get('lat') is None or saved.get('lng') is None):geocode_pev_and_persist(t,saved)
-                    except Exception as e:
-                        geocode_warning=str(e)
-                    return self.send_json({'ok':True,'geocode_warning':geocode_warning})
+                        saved=first(Supa.get('pevs',t,{'id':f'eq.{pid}','select':'*'}));geo=geocode_pev_and_persist(t,saved,force=not (pev_data.get('lat') and pev_data.get('lng'))) if saved else None
+                    except Exception as e: print('[PEV GEOCODE WARNING]',e)
+                    return self.send_json({'ok':True,'geocode':geo})
                 if method=='DELETE':
                     reason=str(data.get('reason','')).strip()
                     if not reason:return self.send_json({'error':'Informe o motivo da exclusão'},400)
@@ -629,15 +655,19 @@ class AppHandler(BaseHTTPRequestHandler):
             if path.startswith('/api/requests/'):
                 rid=int(path.strip('/').split('/')[2]);old=first(Supa.get('scheduling_requests',t,{'id':f'eq.{rid}','select':'*'}));
                 if not old:return self.send_json({'error':'Solicitação não encontrada'},404)
-                if role=='commercial' and (old['requested_by']!=u['id'] or old['status']!='pending'):return self.send_json({'error':'Você só pode alterar solicitações próprias e pendentes'},403)
-                if role not in ('admin','commercial'):return self.send_json({'error':'Sem permissão'},403)
                 if method=='PUT':
+                    if role not in ('admin','commercial'):return self.send_json({'error':'Sem permissão'},403)
+                    if role=='commercial' and (old['requested_by']!=u['id'] or old['status']!='pending'):return self.send_json({'error':'Você só pode alterar solicitações próprias e pendentes'},403)
                     upd={k:(data.get(k) or None if k in ['window_start','window_end','exact_time'] else data.get(k)) for k in ['requested_date','window_start','window_end','exact_time','priority','notes','internal_notes'] if k in data};Supa.update('scheduling_requests',t,{'id':f'eq.{rid}'},upd);audit(t,u,'update','request',rid,'Solicitação alterada',old,upd);return self.send_json({'ok':True})
                 if method=='DELETE':
-                    reason=str(data.get('reason','')).strip()
-                    if not reason:return self.send_json({'error':'Informe o motivo do cancelamento'},400)
-                    if old['status'] not in ('pending',):return self.send_json({'error':'Solicitação já vinculada à operação'},409)
-                    upd={'status':'cancelled','cancelled_at':now_iso(),'cancelled_by':u['id'],'cancellation_reason':reason};Supa.update('scheduling_requests',t,{'id':f'eq.{rid}'},upd);audit(t,u,'cancel','request',rid,'Solicitação cancelada',old,upd,{'reason':reason});return self.send_json({'ok':True})
+                    if role not in ('admin','commercial','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
+                    if role=='commercial' and old.get('requested_by')!=u['id']:return self.send_json({'error':'Você só pode excluir suas próprias solicitações'},403)
+                    if role!='admin' and (old.get('route_id') is not None or old.get('status')!='pending'):
+                        return self.send_json({'error':'Somente solicitações pendentes e ainda não vinculadas a uma rota podem ser excluídas'},409)
+                    audit(t,u,'delete','request',rid,'Solicitação excluída definitivamente',old,None,{'admin_force':role=='admin'})
+                    deleted=Supa.delete('scheduling_requests',t,{'id':f'eq.{rid}'})
+                    if not deleted:return self.send_json({'error':'Não foi possível excluir a solicitação'},409)
+                    return self.send_json({'ok':True})
             if path=='/api/templates' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 row=Supa.insert('route_templates',t,{'name':str(data.get('name','')).strip(),'created_by':u['id']})[0]

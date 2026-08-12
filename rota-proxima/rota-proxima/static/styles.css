@@ -182,3 +182,16 @@ hr { border:0; border-top:1px solid var(--line); margin:18px 0; }
   table.mobile-cards tr { border:1px solid var(--line); border-radius:13px; padding:12px; margin-bottom:10px; background:white; }
   table.mobile-cards td { border:0; padding:5px 0; }
 }
+
+/* Relatório de coletas */
+.report-toolbar { align-items:end; }
+.report-toolbar .field.compact { min-width:145px; }
+.report-toolbar .report-search { flex:1 1 260px; }
+.report-summary { display:flex; justify-content:flex-end; margin-bottom:12px; color:var(--muted); }
+.badge.completed { background:var(--success-bg); color:var(--success); }
+.badge.pending, .badge.arrived { background:var(--warn-bg); color:var(--warn); }
+.badge.skipped { background:#f3f4f6; color:#4b5563; }
+@media (max-width:760px) {
+  .report-toolbar { display:grid; grid-template-columns:1fr; }
+  .report-toolbar .field.compact, .report-toolbar .report-search { min-width:0; width:100%; }
+}
