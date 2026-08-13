@@ -27,7 +27,7 @@ ADMIN_FN=f'{SUPABASE_URL}/functions/v1/rota-admin'
 USER_AGENT='RotaProxima/3.0'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
 SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
-BUILD_ID='SP-RENDER-RELATORIO-MONITORAMENTO-2026-08-13'
+BUILD_ID='SP-RENDER-AUTO-FINALIZA-ROTA-2026-08-13'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -635,7 +635,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 if q.get('date'):params['route_date']=f'eq.{q["date"][0]}'
                 rows=Supa.get('routes',t,params);items=[]
                 for x in rows:
-                    pr=x.pop('profiles',{}) or {};st=x.pop('route_stops',[]) or [];x.pop('origin_json',None);items.append({**x,'driver_name':pr.get('name',''),'completed_stops':sum(1 for z in st if z['status']=='completed'),'total_stops':len(st)})
+                    pr=x.pop('profiles',{}) or {};st=x.pop('route_stops',[]) or [];x.pop('origin_json',None);items.append({**x,'driver_name':pr.get('name',''),'completed_stops':sum(1 for z in st if z['status'] in ('completed','failed','skipped')),'total_stops':len(st)})
                 return self.send_json({'items':items})
             if path.startswith('/api/routes/') and len(path.strip('/').split('/'))==3:
                 if role=='commercial':return self.send_json({'error':'Sem permissão'},403)
@@ -854,7 +854,18 @@ class AppHandler(BaseHTTPRequestHandler):
                 if role!='driver':return self.send_json({'error':'Sem permissão'},403)
                 if action not in ('arrive','complete','fail'):return self.send_json({'error':'Ação inválida'},400)
                 result=Supa.rpc('update_stop_atomic',t,{'p_stop_id':sid,'p_action':action,'p_data':data})
-                return self.send_json(get_route_full(t,int(result['route_id'])))
+                route_id=int(result['route_id'])
+                updated=get_route_full(t,route_id)
+                # Ao encerrar a última parada (realizada ou não realizada), a rota é
+                # finalizada automaticamente. Evita deixar uma rota 4/4 como "Em andamento"
+                # aguardando um segundo clique do motorista.
+                if action in ('complete','fail') and updated.get('status')=='in_progress' and not any(st.get('status') in ('pending','arrived') for st in updated.get('stops',[])):
+                    finished_at=now_iso()
+                    Supa.update('routes',t,{'id':f'eq.{route_id}','status':'eq.in_progress'},{'status':'finished','finished_at':finished_at,'finished_lat':data.get('lat'),'finished_lng':data.get('lng')})
+                    audit(t,u,'finish','route',route_id,'Rota finalizada automaticamente após a última parada',None,None,{'automatic':True,'last_stop_id':sid,'last_stop_action':action})
+                    updated=get_route_full(t,route_id)
+                    updated['auto_finished']=True
+                return self.send_json(updated)
             if path=='/api/settings' and method=='PUT':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 old=first(Supa.get('settings',t,{'id':'eq.1','select':'*'}));upd={k:data.get(k) for k in ['company_name','origin_name','origin_mode','origin_cep','origin_street','origin_number','origin_complement','origin_district','origin_city','origin_state']};upd['origin_lat']=num(data.get('origin_lat'));upd['origin_lng']=num(data.get('origin_lng'));upd['origin_location_confirmed']=upd['origin_lat'] is not None and upd['origin_lng'] is not None;Supa.update('settings',t,{'id':'eq.1'},upd);audit(t,u,'update','settings',1,'Configurações alteradas',old,upd);return self.send_json({'ok':True})

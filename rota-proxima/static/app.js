@@ -14,6 +14,7 @@ const state = {
   plannerServiceTypes: {},
   plannerExactTimes: {},
   map: null,
+  routeListTimer: null,
 };
 
 const $ = (s, root=document) => root.querySelector(s);
@@ -156,6 +157,7 @@ function renderNav() {
 }
 
 async function go(page) {
+  if (state.routeListTimer) { clearInterval(state.routeListTimer); state.routeListTimer = null; }
   state.page = page;
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.page === page));
   $('#page').innerHTML = `<div class="empty">Carregando...</div>`;
@@ -496,8 +498,15 @@ async function saveDraft(){
 async function renderRoutes() {
   state.routes=(await api('/api/routes')).items;
   const admin=state.user.role==='admin';
-  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Operação</span><h1>Rotas</h1><p class="muted">Rascunho → liberada → em andamento → finalizada.</p></div>${admin?'<button id="newRoute" class="btn primary">+ Nova rota</button>':''}</div><div class="card">${routeListHtml(state.routes)}</div>`;
+  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Operação</span><h1>Rotas</h1><p class="muted">Rascunho → liberada → em andamento → finalizada.</p></div>${admin?'<button id="newRoute" class="btn primary">+ Nova rota</button>':''}</div><div class="card"><div id="routesLiveList">${routeListHtml(state.routes)}</div></div>`;
   if($('#newRoute'))$('#newRoute').onclick=()=>go('planner'); bindRouteOpeners();
+  state.routeListTimer=setInterval(async()=>{
+    if(state.page!=='routes'){clearInterval(state.routeListTimer);state.routeListTimer=null;return;}
+    try{
+      const fresh=(await api('/api/routes')).items; state.routes=fresh;
+      const host=$('#routesLiveList'); if(host){host.innerHTML=routeListHtml(fresh);bindRouteOpeners();}
+    }catch(_){}
+  },8000);
 }
 
 function routeTimelineHtml(r){
@@ -516,12 +525,12 @@ async function openRoute(id) {
     const canRelease=state.user.role==='admin'&&r.status==='draft';
     const canDelete=state.user.role==='admin';
     const dlg=modal(`<div class="modal-box"><div class="modal-head"><div><span class="eyebrow">Rota #${r.id}</span><h2>${esc(r.name)}</h2><p class="muted">${fmtDate(r.route_date)} • ${esc(r.driver_name)}</p></div><button class="icon-btn modal-close">×</button></div>
-      <div class="summary-strip"><div class="summary-box"><span>Status</span><strong>${statusLabel[r.status]}</strong></div><div class="summary-box"><span>Distância</span><strong>${fmtKm(r.total_distance_m)}</strong></div><div class="summary-box"><span>Tempo estimado</span><strong>${fmtDuration(r.total_duration_s)}</strong></div></div>
+      <div class="summary-strip"><div class="summary-box"><span>Status</span><strong id="routeModalStatus">${statusLabel[r.status]}</strong></div><div class="summary-box"><span>Distância</span><strong>${fmtKm(r.total_distance_m)}</strong></div><div class="summary-box"><span>Tempo estimado</span><strong>${fmtDuration(r.total_duration_s)}</strong></div></div>
       <div class="route-preview">${r.stops.map(s=>`<div class="route-stop"><div class="stop-number">${s.sequence}</div><div><strong>${esc(s.pev_name)}</strong><div class="stop-meta">${esc(s.street)}, ${esc(s.number||'s/n')} • ${esc(s.city)}/${esc(s.state)}${s.contact_name?`<br>Responsável: ${esc(s.contact_name)} ${s.phone?`• ${esc(s.phone)}`:''}`:''}<br><strong>${esc(serviceTypeLabel[s.service_type||'collection'])}</strong>${s.exact_time?` • Horário específico: ${esc(s.exact_time)}`:''}</div></div><span class="badge ${s.status==='failed'?'failed':s.priority}">${s.status==='completed'?'Concluída':s.status==='failed'?'Não realizada':priorityLabel[s.priority]}</span></div>`).join('')}</div>
-      ${r.schedule_warnings?.length?`<div class="warning"><strong>Atenção ao horário</strong><br>${r.schedule_warnings.map(esc).join('<br>')}</div>`:''}<div class="card route-monitor-card"><div class="route-monitor-head"><div><span class="eyebrow">Motorista → Administração</span><h3>Acompanhamento da rota</h3></div>${r.status==='in_progress'?'<span class="live-pill">● AO VIVO</span>':''}</div><div id="routeLiveTimeline">${routeTimelineHtml(r)}</div></div>
+      ${r.schedule_warnings?.length?`<div class="warning"><strong>Atenção ao horário</strong><br>${r.schedule_warnings.map(esc).join('<br>')}</div>`:''}<div class="card route-monitor-card"><div class="route-monitor-head"><div><span class="eyebrow">Motorista → Administração</span><h3>Acompanhamento da rota</h3></div><span id="routeLivePill" class="live-pill ${r.status==='in_progress'?'':'hidden'}">● AO VIVO</span></div><div id="routeLiveTimeline">${routeTimelineHtml(r)}</div></div>
       <div class="form-actions"><button class="btn ghost modal-close">Fechar</button>${canDelete?'<button id="deleteRoute" class="btn danger">Excluir rota</button>':''}${canRelease?'<button id="releaseRoute" class="btn success">Liberar para motorista</button>':''}</div></div>`);
     let liveTimer=null;
-    if(r.status==='in_progress'){liveTimer=setInterval(async()=>{if(!dlg.open){clearInterval(liveTimer);return}try{const fresh=await api(`/api/routes/${r.id}`);const el=$('#routeLiveTimeline');if(el)el.innerHTML=routeTimelineHtml(fresh);}catch(_){ }},8000);dlg.addEventListener('close',()=>liveTimer&&clearInterval(liveTimer),{once:true});}
+    if(r.status==='in_progress'){liveTimer=setInterval(async()=>{if(!dlg.open){clearInterval(liveTimer);return}try{const fresh=await api(`/api/routes/${r.id}`);const el=$('#routeLiveTimeline');if(el)el.innerHTML=routeTimelineHtml(fresh);const st=$('#routeModalStatus');if(st)st.textContent=statusLabel[fresh.status]||fresh.status;const pill=$('#routeLivePill');if(pill)pill.classList.toggle('hidden',fresh.status!=='in_progress');if(fresh.status!=='in_progress'){clearInterval(liveTimer);liveTimer=null;}}catch(_){ }},8000);dlg.addEventListener('close',()=>liveTimer&&clearInterval(liveTimer),{once:true});}
     if(canDelete)$('#deleteRoute').onclick=async()=>{
       if(!confirm(`Excluir DEFINITIVAMENTE a rota "${r.name}"?\n\nA rota pode estar liberada, em andamento ou finalizada. Esta ação não pode ser desfeita.`))return;
       const reason=prompt('Informe o motivo da exclusão:','')?.trim();if(!reason)return;
@@ -600,7 +609,7 @@ function drawDriverRoute(r){
     <div class="driver-hero"><span class="eyebrow">${statusLabel[r.status]}</span><h1>${esc(r.name)}</h1><p>${fmtDate(r.route_date)} • ${done} de ${total} paradas encerradas</p><div class="driver-progress"><span style="width:${pct}%"></span></div></div>
     ${r.status==='released'?`<div class="card next-stop"><h2>Rota pronta</h2><p class="muted">Ao iniciar, registraremos data, hora e sua localização.</p><button id="startRoute" class="btn success wide">Iniciar rota</button></div>`:''}
     ${r.status==='in_progress' && next ? driverNextStopHtml(next) : ''}
-    ${r.status==='in_progress' && !next ? `<div class="card"><h2>Todas as paradas foram encerradas</h2><p class="muted">Finalize a rota para registrar o horário e a localização de término.</p><button id="finishRoute" class="btn success wide">Finalizar rota</button></div>`:''}
+    ${r.status==='in_progress' && !next ? `<div class="card"><h2>Encerrando rota...</h2><p class="muted">Todas as paradas foram encerradas. Se a finalização automática não ocorrer, use o botão abaixo.</p><button id="finishRoute" class="btn success wide">Finalizar rota</button></div>`:''}${r.status==='finished'?`<div class="card"><h2>Rota finalizada</h2><p class="muted">Todas as paradas foram encerradas${r.finished_at?` • ${fmtDateTime(r.finished_at)}`:''}.</p></div>`:''}
     <div class="card" style="margin-top:16px"><h2>Sequência</h2><div class="timeline">${r.stops.map(s=>`<div class="timeline-item"><div class="timeline-dot ${s.status==='completed'?'done':s.status==='failed'?'bad':''}">${s.status==='completed'?'✓':s.status==='failed'?'!':s.sequence}</div><div><strong>${esc(s.pev_name)}</strong><div class="stop-meta">${esc(s.city)}/${esc(s.state)}${s.completed_at?` • ${fmtDateTime(s.completed_at)}`:''}</div></div><span class="badge ${s.status==='failed'?'failed':s.priority}">${s.status==='completed'?'Feita':s.status==='failed'?'Não feita':priorityLabel[s.priority]}</span></div>`).join('')}</div></div>
   </div>`;
   if($('#startRoute'))$('#startRoute').onclick=async()=>{try{const pos=await getPosition();const updated=await api(`/api/routes/${r.id}/start`,{method:'POST',body:{...pos,local_time:localHHMM()}});toast(updated.schedule_warnings?.length?updated.schedule_warnings[0]:'Rota iniciada e sequência ajustada pelo horário atual.',updated.schedule_warnings?.length?'error':'success');drawDriverRoute(updated);}catch(e){toast(e.message,'error');}};
@@ -634,14 +643,14 @@ function bindDriverStopActions(route,next){
   if($('#googleNav'))$('#googleNav').onclick=()=>window.open(`https://www.google.com/maps/dir/?api=1&destination=${address}&travelmode=driving&dir_action=navigate`,'_blank');
   if($('#wazeNav'))$('#wazeNav').onclick=()=>window.open(`https://waze.com/ul?q=${address}&navigate=yes`,'_blank');
   if($('#arriveStop'))$('#arriveStop').onclick=async()=>{try{const pos=await getPosition();const updated=await api(`/api/stops/${next.id}/arrive`,{method:'POST',body:pos});toast('Chegada registrada.','success');drawDriverRoute(updated);}catch(e){toast(e.message,'error');}};
-  if($('#completeStop'))$('#completeStop').onclick=async()=>{try{const pos=await getPosition();const updated=await api(`/api/stops/${next.id}/complete`,{method:'POST',body:{...pos,note:''}});toast('Parada finalizada.','success');drawDriverRoute(updated);}catch(e){toast(e.message,'error');}};
+  if($('#completeStop'))$('#completeStop').onclick=async()=>{try{const pos=await getPosition();const updated=await api(`/api/stops/${next.id}/complete`,{method:'POST',body:{...pos,note:''}});toast(updated.status==='finished'?'Última parada finalizada. Rota finalizada automaticamente.':'Parada finalizada.','success');drawDriverRoute(updated);}catch(e){toast(e.message,'error');}};
   if($('#failStop'))$('#failStop').onclick=()=>openFailModal(next,route);
   if($('#recalcRoute'))$('#recalcRoute').onclick=async()=>{try{const pos=await getPosition(true);const updated=await api(`/api/routes/${route.id}/recalculate`,{method:'POST',body:{...pos,local_time:localHHMM()}});toast(updated.schedule_warnings?.length?updated.schedule_warnings[0]:'Paradas restantes recalculadas respeitando os horários específicos.',updated.schedule_warnings?.length?'error':'success');drawDriverRoute(updated);}catch(e){toast(e.message,'error');}};
 }
 
 function openFailModal(stop,route){
   modal(`<form id="failForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Parada ${stop.sequence}</span><h2>Não foi possível realizar</h2></div><button type="button" class="icon-btn modal-close">×</button></div><label class="field"><span>Motivo</span><select name="reason"><option>Local fechado</option><option>Responsável ausente</option><option>Material indisponível</option><option>Endereço incorreto</option><option>Outro</option></select></label><label class="field" style="margin-top:12px"><span>Observação</span><textarea name="note"></textarea></label><div class="form-actions"><button type="button" class="btn ghost modal-close">Cancelar</button><button class="btn danger">Registrar</button></div></form>`);
-  $('#failForm').onsubmit=async e=>{e.preventDefault();try{const pos=await getPosition();const body={...Object.fromEntries(new FormData(e.target)),...pos};const updated=await api(`/api/stops/${stop.id}/fail`,{method:'POST',body});$('#modal').close();toast('Ocorrência registrada.','success');drawDriverRoute(updated);}catch(err){toast(err.message,'error');}};
+  $('#failForm').onsubmit=async e=>{e.preventDefault();try{const pos=await getPosition();const body={...Object.fromEntries(new FormData(e.target)),...pos};const updated=await api(`/api/stops/${stop.id}/fail`,{method:'POST',body});$('#modal').close();toast(updated.status==='finished'?'Ocorrência registrada. Rota finalizada automaticamente.':'Ocorrência registrada.','success');drawDriverRoute(updated);}catch(err){toast(err.message,'error');}};
 }
 
 async function renderHistory(){
