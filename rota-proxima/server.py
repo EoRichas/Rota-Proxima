@@ -27,7 +27,7 @@ ADMIN_FN=f'{SUPABASE_URL}/functions/v1/rota-admin'
 USER_AGENT='RotaProxima/3.0'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
 SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
-BUILD_ID='SP-RENDER-AUTO-FINALIZA-ROTA-2026-08-13'
+BUILD_ID='SP-RENDER-CARTEIRA-COMERCIAL-2026-08-13'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -227,22 +227,32 @@ def collection_report_items(token,date_from,date_to):
     route_map={int(r['id']):r for r in routes};ids=','.join(str(x) for x in route_map)
     stops=Supa.get('route_stops',token,{
         'route_id':f'in.({ids})',
-        'select':'id,route_id,pev_id,request_id,sequence,status,service_type,exact_time,arrived_at,completed_at,failure_reason,driver_note,pevs(name,street,number,district,city,state,cep,contact_name,phone),scheduling_requests(requested_by,profiles!scheduling_requests_requested_by_fkey(name))',
+        'select':'id,route_id,pev_id,request_id,sequence,status,service_type,exact_time,arrived_at,completed_at,failure_reason,driver_note,collected_weight_kg,pevs(name,street,number,district,city,state,cep,contact_name,phone,commercial_owner_id,profiles!pevs_commercial_owner_id_fkey(id,name)),scheduling_requests(requested_by,profiles!scheduling_requests_requested_by_fkey(name))',
         'order':'route_id.desc,sequence.asc'
     })
     items=[]
     for st in stops:
-        r=route_map.get(int(st['route_id'])) or {};drv=r.get('profiles') or {};pev=st.pop('pevs',{}) or {};req=st.pop('scheduling_requests',{}) or {};commercial=req.get('profiles') or {}
+        r=route_map.get(int(st['route_id'])) or {};drv=r.get('profiles') or {};pev=st.pop('pevs',{}) or {};req=st.pop('scheduling_requests',{}) or {};requester=req.get('profiles') or {};owner=pev.pop('profiles',{}) or {}
         items.append({
             **st,'route_name':r.get('name',''),'route_date':r.get('route_date'),'route_status':r.get('status'),
             'driver_id':r.get('driver_id'),'driver_name':drv.get('name',''),
             'pev_name':pev.get('name',''),'street':pev.get('street',''),'number':pev.get('number',''),'district':pev.get('district',''),
             'city':pev.get('city',''),'state':pev.get('state',''),'cep':pev.get('cep',''),'contact_name':pev.get('contact_name',''),'contact_phone':pev.get('phone',''),
-            'requested_by_name':commercial.get('name','')
+            'requested_by_name':requester.get('name',''),'commercial_owner_id':pev.get('commercial_owner_id'),'commercial_owner_name':owner.get('name','')
         })
     return items
 
-def filter_collection_report(items,status='all',service_type='all',search='',pev='all',route='all'):
+def commercial_portfolio_summary(token):
+    rows=Supa.get('pevs',token,{'deleted_at':'is.null','active':'eq.true','select':'id,commercial_owner_id,profiles!pevs_commercial_owner_id_fkey(id,name)'})
+    out={}
+    for row in rows:
+        owner=row.get('profiles') or {};oid=str(row.get('commercial_owner_id') or '')
+        if not oid:continue
+        g=out.setdefault(oid,{'name':owner.get('name') or 'Comercial','pevs':0})
+        g['pevs']+=1
+    return out
+
+def filter_collection_report(items,status='all',service_type='all',search='',pev='all',route='all',commercial='all'):
     q=(search or '').strip().lower()
     out=[]
     for x in items:
@@ -250,8 +260,9 @@ def filter_collection_report(items,status='all',service_type='all',search='',pev
         if service_type!='all' and x.get('service_type','collection')!=service_type:continue
         if pev!='all' and str(x.get('pev_id') or '')!=str(pev):continue
         if route!='all' and str(x.get('route_id') or '')!=str(route):continue
+        if commercial!='all' and str(x.get('commercial_owner_id') or '')!=str(commercial):continue
         if q:
-            hay=' '.join(str(x.get(k) or '') for k in ('pev_name','city','state','route_name','requested_by_name','failure_reason','driver_note')).lower()
+            hay=' '.join(str(x.get(k) or '') for k in ('pev_name','city','state','route_name','requested_by_name','commercial_owner_name','failure_reason','driver_note')).lower()
             if q not in hay:continue
         out.append(x)
     return out
@@ -285,11 +296,12 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
 
     status_map={'all':'Todos','completed':'Realizadas','failed':'Não realizadas','pending':'Pendentes','arrived':'No local','skipped':'Puladas'}
     type_map={'all':'Todos','collection':'Coleta','delivery':'Entrega'}
-    pev_name='Todos'; route_name='Todas'
+    pev_name='Todos'; route_name='Todas'; commercial_name=filters.get('commercial_name') or 'Todos'
     if filters.get('pev') not in (None,'','all') and items: pev_name=items[0].get('pev_name') or 'PEV selecionada'
     if filters.get('route') not in (None,'','all') and items: route_name=items[0].get('route_name') or 'Rota selecionada'
-    filter_data=[[Paragraph('<b>FILTROS APLICADOS</b>',small_b),Paragraph(f'<b>Período</b><br/>{date_from} a {date_to}',small),Paragraph(f'<b>PEV / Condomínio</b><br/>{_pdf_text(pev_name)}',small),Paragraph(f'<b>Rota</b><br/>{_pdf_text(route_name)}',small),Paragraph(f'<b>Tipo</b><br/>{type_map.get(filters.get("service_type","all"),"Todos")}',small),Paragraph(f'<b>Status</b><br/>{status_map.get(filters.get("status","all"),"Todos")}',small)]]
-    filter_table=Table(filter_data,colWidths=[85,95,135,95,70,77]);filter_table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),pale),('BOX',(0,0),(-1,-1),.6,line),('INNERGRID',(1,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+    if filters.get('commercial') not in (None,'','all') and items and not filters.get('commercial_name'): commercial_name=items[0].get('commercial_owner_name') or 'Comercial selecionado'
+    filter_data=[[Paragraph('<b>FILTROS</b>',small_b),Paragraph(f'<b>Período</b><br/>{date_from} a {date_to}',small),Paragraph(f'<b>Comercial</b><br/>{_pdf_text(commercial_name)}',small),Paragraph(f'<b>PEV</b><br/>{_pdf_text(pev_name)}',small),Paragraph(f'<b>Rota</b><br/>{_pdf_text(route_name)}',small),Paragraph(f'<b>Tipo</b><br/>{type_map.get(filters.get("service_type","all"),"Todos")}',small),Paragraph(f'<b>Status</b><br/>{status_map.get(filters.get("status","all"),"Todos")}',small)]]
+    filter_table=Table(filter_data,colWidths=[45,82,78,110,76,58,68]);filter_table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),pale),('BOX',(0,0),(-1,-1),.6,line),('INNERGRID',(1,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
 
     kpis=[('Total de visitas',total),('Coletas',collections),('Entregas',deliveries),('Realizadas',completed),('Não realizadas',failed),('Taxa de realização',f'{rate:.1f}%'.replace('.',','))]
     krow=[]
@@ -297,6 +309,27 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
     kpi_table=Table([krow],colWidths=[91]*6);kpi_table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),2),('RIGHTPADDING',(0,0),(-1,-1),2)]))
 
     story=[head,Spacer(1,12),filter_table,Spacer(1,12),kpi_table,Spacer(1,12)]
+    if filters.get('show_comparison') and filters.get('commercial','all')=='all':
+        grouped={}
+        for oid,p in (filters.get('portfolio') or {}).items(): grouped[str(oid)]={'name':p.get('name') or 'Comercial','pevs_total':int(p.get('pevs') or 0),'pevs':set(),'visits':0,'collections':0,'deliveries':0,'completed':0,'failed':0}
+        for x in items:
+            oid=str(x.get('commercial_owner_id') or '')
+            if not oid: continue
+            g=grouped.setdefault(oid,{'name':x.get('commercial_owner_name') or 'Comercial','pevs_total':0,'pevs':set(),'visits':0,'collections':0,'deliveries':0,'completed':0,'failed':0})
+            g['pevs'].add(x.get('pev_id'));g['visits']+=1
+            if x.get('service_type','collection')=='collection':g['collections']+=1
+            else:g['deliveries']+=1
+            if x.get('status')=='completed':g['completed']+=1
+            elif x.get('status')=='failed':g['failed']+=1
+        if grouped:
+            comp_head=ParagraphStyle('CompHead',parent=small_b,textColor=colors.white,alignment=TA_CENTER)
+            comp_rows=[[Paragraph('Comercial',comp_head),Paragraph('PEVs',comp_head),Paragraph('Visitas',comp_head),Paragraph('Coletas',comp_head),Paragraph('Entregas',comp_head),Paragraph('Realizadas',comp_head),Paragraph('Taxa',comp_head)]]
+            for g in sorted(grouped.values(),key=lambda z:z['name'].lower()):
+                r=round(g['completed']/g['visits']*100,1) if g['visits'] else 0
+                comp_rows.append([Paragraph(_pdf_text(g['name']),small),str(g.get('pevs_total') or len(g['pevs'])),str(g['visits']),str(g['collections']),str(g['deliveries']),str(g['completed']),f'{r:.1f}%'.replace('.',',')])
+            comp=Table(comp_rows,repeatRows=1,colWidths=[150,55,60,60,60,65,65])
+            comp.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),green),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,1),(-1,-1),'CENTER'),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]))
+            story += [Paragraph('Comparativo por Comercial',ParagraphStyle('Section',parent=small_b,fontSize=10,leading=13)),Spacer(1,5),comp,Spacer(1,12)]
     if filters.get('pev') not in (None,'','all'):
         last=max((x for x in items if x.get('route_date')),key=lambda x:(str(x.get('route_date')),str(x.get('completed_at') or x.get('arrived_at') or '')),default=None)
         selected=Table([[Paragraph('<b>PEV SELECIONADO</b><br/><font size="12"><b>'+_pdf_text(pev_name)+'</b></font>',small),Paragraph(f'<b>Total de visitas</b><br/><font size="15"><b>{total}</b></font>',small),Paragraph(f'<b>Total de coletas</b><br/><font size="15"><b>{collections}</b></font>',small),Paragraph(f'<b>Total de entregas</b><br/><font size="15"><b>{deliveries}</b></font>',small),Paragraph(f'<b>Última visita</b><br/>{_pdf_text((last or {}).get("route_date") or "-")}',small)]],colWidths=[210,85,85,85,92])
@@ -610,14 +643,20 @@ class AppHandler(BaseHTTPRequestHandler):
             if path=='/api/drivers':
                 if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json({'items':Supa.get('profiles',t,{'role':'eq.driver','active':'eq.true','select':'*','order':'name.asc'})})
+            if path=='/api/commercials':
+                if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
+                return self.send_json({'items':Supa.get('profiles',t,{'role':'eq.commercial','active':'eq.true','select':'id,name,username,active','order':'name.asc'})})
             if path=='/api/pevs':
                 if role not in ('admin','commercial_manager','commercial'):return self.send_json({'error':'Sem permissão'},403)
-                params={'select':'*','order':'favorite.desc,name.asc'}
+                params={'select':'*,profiles!pevs_commercial_owner_id_fkey(id,name)','order':'favorite.desc,name.asc'}
                 if q.get('trash',['0'])[0]=='1':
                     if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                     params['deleted_at']='not.is.null'
                 else:params.update({'deleted_at':'is.null','active':'eq.true'})
-                return self.send_json({'items':Supa.get('pevs',t,params)})
+                rows=Supa.get('pevs',t,params);items=[]
+                for x in rows:
+                    owner=x.pop('profiles',{}) or {};items.append({**x,'commercial_owner_name':owner.get('name','')})
+                return self.send_json({'items':items})
             if path=='/api/requests':
                 if role not in ('admin','commercial_manager','commercial'):return self.send_json({'error':'Sem permissão'},403)
                 params={'select':'*,pevs(name,street,number,district,city,state,cep,contact_name,contact_role,phone),profiles!scheduling_requests_requested_by_fkey(name),routes(name)','order':'requested_date.asc,id.desc'}
@@ -644,7 +683,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 if role=='driver' and r['driver_id']!=u['id']:return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json(r)
             if path in ('/api/reports/collections','/api/reports/collections/pdf'):
-                if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
+                if role not in ('admin','commercial_manager','commercial'):return self.send_json({'error':'Sem permissão'},403)
                 date_from=(q.get('from') or [''])[0].strip();date_to=(q.get('to') or [''])[0].strip()
                 if not date_from or not date_to:return self.send_json({'error':'Informe o período do relatório'},400)
                 try:
@@ -654,8 +693,13 @@ class AppHandler(BaseHTTPRequestHandler):
                 if (d2-d1).days>366:return self.send_json({'error':'O período máximo do relatório é de 367 dias'},400)
                 items=collection_report_items(t,date_from,date_to)
                 if path.endswith('/pdf'):
-                    filters={'status':(q.get('status') or ['all'])[0],'service_type':(q.get('service_type') or ['all'])[0],'q':(q.get('q') or [''])[0],'pev':(q.get('pev') or ['all'])[0],'route':(q.get('route') or ['all'])[0]}
-                    items=filter_collection_report(items,filters['status'],filters['service_type'],filters['q'],filters['pev'],filters['route'])
+                    requested_commercial=(q.get('commercial') or ['all'])[0]
+                    effective_commercial=requested_commercial if role in ('admin','commercial_manager') else str(u['id'])
+                    commercial_name=u.get('name','') if role=='commercial' else ''
+                    portfolio=commercial_portfolio_summary(t) if role in ('admin','commercial_manager') else {}
+                    if role in ('admin','commercial_manager') and effective_commercial!='all': commercial_name=(portfolio.get(str(effective_commercial)) or {}).get('name','')
+                    filters={'status':(q.get('status') or ['all'])[0],'service_type':(q.get('service_type') or ['all'])[0],'q':(q.get('q') or [''])[0],'pev':(q.get('pev') or ['all'])[0],'route':(q.get('route') or ['all'])[0],'commercial':effective_commercial,'commercial_name':commercial_name,'show_comparison':role in ('admin','commercial_manager'),'portfolio':portfolio}
+                    items=filter_collection_report(items,filters['status'],filters['service_type'],filters['q'],filters['pev'],filters['route'],filters['commercial'])
                     raw=build_collections_pdf(items,date_from,date_to,filters)
                     return self.send_bytes(raw,'application/pdf',filename=f'relatorio-coletas-entregas-{date_from}-a-{date_to}.pdf')
                 return self.send_json({'items':items})
