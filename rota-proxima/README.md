@@ -108,4 +108,3 @@ O horário específico não altera o cadastro permanente do PEV. Ao iniciar ou r
 
 ### Limitação de uso no celular
 Em rede local HTTP (`http://IP-DO-PC:8080`), alguns navegadores bloqueiam GPS por não ser HTTPS. A execução básica da rota continua possível, mas funções que exigem localização atual (como recalcular a partir da posição do motorista) podem depender de HTTPS.
-

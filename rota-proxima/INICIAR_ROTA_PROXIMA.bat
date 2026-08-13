@@ -66,4 +66,3 @@ echo Para encerrar, pressione CTRL+C.
 echo.
 python "%~dp0server.py"
 pause
-

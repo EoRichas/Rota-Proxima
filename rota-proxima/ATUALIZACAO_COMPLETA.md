@@ -15,4 +15,3 @@ Inclui:
 - botão Atualizar coordenadas tenta novamente todas as PEVs ainda não confirmadas.
 
 As migrations necessárias do Supabase já foram aplicadas no projeto Rota Próxima SP nesta atualização.
-

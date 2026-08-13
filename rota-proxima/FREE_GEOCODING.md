@@ -13,4 +13,3 @@ No cadastro/edição, quando latitude/longitude estão vazias, o sistema tenta l
 O Administrador também possui o botão **Atualizar coordenadas** em PEVs / Locais para preencher apenas registros ainda sem coordenadas.
 
 Nenhuma variável de ambiente nova e nenhum SQL adicional são necessários.
-

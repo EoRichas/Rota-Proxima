@@ -5,13 +5,14 @@ const state = {
   drivers: [],
   users: [],
   routes: [],
-  templates: [],
   requests: [],
   requestSelection: [],
   settings: null,
   routePreview: null,
   plannerSelection: new Set(),
   plannerPriorities: {},
+  plannerServiceTypes: {},
+  plannerExactTimes: {},
   map: null,
 };
 
@@ -33,6 +34,7 @@ const phoneHref = s => `tel:${digits(s)}`;
 const whatsHref = s => `https://wa.me/55${digits(s).replace(/^55/,'')}`;
 const statusLabel = {draft:'Rascunho',released:'Liberada',in_progress:'Em andamento',finished:'Finalizada',cancelled:'Cancelada'};
 const priorityLabel = {urgent:'Urgente',high:'Alta',normal:'Normal',low:'Baixa'};
+const serviceTypeLabel = {collection:'Coleta',delivery:'Entrega'};
 const roleLabel = {admin:'Administrador',commercial_manager:'Gerente Comercial',commercial:'Comercial',driver:'Motorista'};
 const requestStatusLabel = {pending:'Pendente',scheduled:'Em rota',in_service:'Em atendimento',completed:'Concluída',not_completed:'Não realizada',cancelled:'Cancelada'};
 const apiCache = new Map();
@@ -128,10 +130,7 @@ $('#logoutBtn').onclick = async () => {
   await api('/api/logout', {method:'POST'}).catch(()=>{});
   location.reload();
 };
-$('#menuBtn').onclick = () => {
-  const open = $('#sidebar').classList.toggle('open');
-  $('#menuBtn').setAttribute('aria-expanded', String(open));
-};
+$('#menuBtn').onclick = () => $('#sidebar').classList.toggle('open');
 
 function enterApp(user) {
   state.user = user;
@@ -150,14 +149,10 @@ function renderNav() {
   let items=[];
   if (state.user.role === 'driver') items=[['driver','Minha rota'],['history','Histórico']];
   else if (state.user.role === 'commercial') items=[['requests','Solicitações'],['pevs','PEVs / Locais']];
-  else if (state.user.role === 'commercial_manager') items=[['dashboard','Dashboard'],['routes','Rotas'],['requests','Solicitações'],['reports','Relatório de coletas'],['pevs','PEVs / Locais']];
-  else items=[['dashboard','Dashboard'],['requests','Solicitações'],['planner','Planejar rota'],['pevs','PEVs / Locais'],['routes','Rotas'],['templates','Recorrentes'],['users','Usuários'],['reports','Relatório de coletas'],['settings','Configurações']];
+  else if (state.user.role === 'commercial_manager') items=[['dashboard','Dashboard'],['routes','Rotas'],['requests','Solicitações'],['reports','Relatório operacional'],['pevs','PEVs / Locais']];
+  else items=[['dashboard','Dashboard'],['requests','Solicitações'],['planner','Planejar rota'],['pevs','PEVs / Locais'],['routes','Rotas'],['users','Usuários'],['reports','Relatório operacional'],['settings','Configurações']];
   $('#nav').innerHTML = items.map(([id,label]) => `<button data-page="${id}">${label}</button>`).join('');
-  $$('#nav button').forEach(b => b.onclick = () => {
-    $('#sidebar').classList.remove('open');
-    $('#menuBtn').setAttribute('aria-expanded', 'false');
-    go(b.dataset.page);
-  });
+  $$('#nav button').forEach(b => b.onclick = () => { $('#sidebar').classList.remove('open'); go(b.dataset.page); });
 }
 
 async function go(page) {
@@ -170,7 +165,6 @@ async function go(page) {
     if (page === 'pevs') return renderPevs();
     if (page === 'requests') return renderRequests();
     if (page === 'routes') return renderRoutes();
-    if (page === 'templates') return renderTemplates();
     if (page === 'users') return renderUsers();
     if (page === 'reports') return renderCollectionReport();
     if (page === 'settings') return renderSettings();
@@ -403,7 +397,7 @@ function priorityOptions(selected='normal') { return Object.entries(priorityLabe
 
 async function renderPlanner() {
   if(state.user.role!=='admin') return go(state.user.role==='commercial_manager'?'dashboard':'requests');
-  await Promise.all([api('/api/pevs').then(x=>state.pevs=x.items), api('/api/drivers').then(x=>state.drivers=x.items), api('/api/templates').then(x=>state.templates=x.items)]);
+  await Promise.all([api('/api/pevs').then(x=>state.pevs=x.items), api('/api/drivers').then(x=>state.drivers=x.items)]);
   state.routePreview = null;
   const selectedRequests=state.requestSelection||[];
   const preselectedIds=[...new Set(selectedRequests.map(r=>r.pev_id))];
@@ -417,7 +411,6 @@ async function renderPlanner() {
           <label class="field"><span>Data</span><input id="routeDate" type="date" value="${today}"></label>
           <label class="field"><span>Motorista</span><select id="routeDriver"><option value="">Selecione</option>${state.drivers.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></label>
           <label class="field span-2"><span>Nome da rota</span><input id="routeName" value="Rota ${new Date().toLocaleDateString('pt-BR')}"></label>
-          <label class="field span-2"><span>Modelo recorrente</span><select id="templateSelect"><option value="">Nenhum</option>${state.templates.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></label>
         </div>
         ${selectedRequests.length?`<div class="info" style="margin-top:14px">${selectedRequests.length} solicitação(ões) comercial(is) carregada(s) para esta rota.</div>`:''}
         <div style="margin:14px 0"><label><input id="returnOrigin" type="checkbox" checked> Retornar à base no final</label></div>
@@ -433,9 +426,13 @@ async function renderPlanner() {
   let favOnly=false;
   state.plannerSelection = new Set(preselectedIds);
   state.plannerPriorities = {};
+  state.plannerServiceTypes = {};
+  state.plannerExactTimes = {};
   state.pevs.forEach(p=>{
     const rq=requestByPev[p.id];
     state.plannerPriorities[p.id]=rq?.priority||p.default_priority||'normal';
+    state.plannerServiceTypes[p.id]='collection';
+    state.plannerExactTimes[p.id]=rq?.exact_time||'';
   });
   function updateSelectedCount(){
     const n=state.plannerSelection.size;
@@ -445,25 +442,20 @@ async function renderPlanner() {
   function drawSelector(){
     const q=$('#selectSearch').value.toLowerCase();
     const items=state.pevs.filter(p=>(!favOnly||p.favorite)&&`${p.name} ${p.city} ${p.district}`.toLowerCase().includes(q));
-    $('#pevSelector').innerHTML=items.map(p=>`<label class="pev-check"><input type="checkbox" data-id="${p.id}" ${state.plannerSelection.has(p.id)?'checked':''}><div><div class="name">${p.favorite?'★ ':''}${esc(p.name)}</div><div class="addr">${esc(p.street)}, ${esc(p.number||'s/n')} • ${esc(p.city)}/${esc(p.state)}</div></div><select class="pev-priority" data-id="${p.id}" title="Prioridade">${priorityOptions(state.plannerPriorities[p.id]||requestByPev[p.id]?.priority||p.default_priority)}</select></label>`).join('') || `<div class="empty">Nenhum PEV encontrado. As seleções anteriores continuam mantidas.</div>`;
+    $('#pevSelector').innerHTML=items.map(p=>`<div class="pev-check"><input type="checkbox" data-id="${p.id}" ${state.plannerSelection.has(p.id)?'checked':''}><div class="pev-check-main"><div class="name">${p.favorite?'★ ':''}${esc(p.name)}</div><div class="addr">${esc(p.street)}, ${esc(p.number||'s/n')} • ${esc(p.city)}/${esc(p.state)}</div></div><label class="planner-control"><span>Atendimento</span><select class="pev-service-type" data-id="${p.id}"><option value="collection" ${state.plannerServiceTypes[p.id]==='collection'?'selected':''}>Coleta</option><option value="delivery" ${state.plannerServiceTypes[p.id]==='delivery'?'selected':''}>Entrega</option></select></label><label class="planner-control"><span>Horário</span><input class="pev-exact-time" data-id="${p.id}" type="time" value="${esc(state.plannerExactTimes[p.id]||'')}"></label><label class="planner-control"><span>Prioridade</span><select class="pev-priority" data-id="${p.id}">${priorityOptions(state.plannerPriorities[p.id]||requestByPev[p.id]?.priority||p.default_priority)}</select></label></div>`).join('') || `<div class="empty">Nenhum PEV encontrado. As seleções anteriores continuam mantidas.</div>`;
     $$('.pev-check input[type=checkbox]').forEach(x=>x.onchange=()=>{
       const id=Number(x.dataset.id);
       if(x.checked) state.plannerSelection.add(id); else state.plannerSelection.delete(id);
       updateSelectedCount();
     });
     $$('.pev-priority').forEach(x=>x.onchange=()=>{state.plannerPriorities[Number(x.dataset.id)]=x.value;});
+    $$('.pev-service-type').forEach(x=>x.onchange=()=>{state.plannerServiceTypes[Number(x.dataset.id)]=x.value;});
+    $$('.pev-exact-time').forEach(x=>x.onchange=()=>{state.plannerExactTimes[Number(x.dataset.id)]=x.value;});
     updateSelectedCount();
   }
   drawSelector();
   $('#selectSearch').oninput=drawSelector;
   $('#selectFavorites').onclick=()=>{favOnly=!favOnly; $('#selectFavorites').textContent=favOnly?'Mostrar todos':'Somente favoritos'; drawSelector();};
-  $('#templateSelect').onchange=()=>{
-    const t=state.templates.find(t=>t.id===Number($('#templateSelect').value));
-    if(!t){state.plannerSelection=new Set(preselectedIds);drawSelector();return;}
-    state.plannerSelection=new Set(t.pevs.map(p=>Number(p.pev_id)));
-    t.pevs.forEach(p=>{state.plannerPriorities[Number(p.pev_id)]=p.priority||state.plannerPriorities[Number(p.pev_id)]||'normal';});
-    drawSelector();
-  };
   $('#nearestOptimize').onclick=()=>optimizePlanner('nearest'); $('#bestOptimize').onclick=()=>optimizePlanner('best');
 }
 
@@ -478,7 +470,7 @@ async function optimizePlanner(mode) {
   });
   $('#routePreview').innerHTML='<div class="empty">Calculando sequência...</div>';
   try {
-    const data=await api('/api/optimize',{method:'POST',body:{pev_ids:selected,return_origin:$('#returnOrigin').checked,mode,start_time:localHHMM(),stops:selected.map(id=>{const rq=(state.requestSelection||[]).find(r=>r.pev_id===id);return {pev_id:id,request_id:rq?.id||null,priority:priorities[id]||'normal',window_start:rq?.window_start||'',window_end:rq?.window_end||'',exact_time:rq?.exact_time||''};})}});
+    const data=await api('/api/optimize',{method:'POST',body:{pev_ids:selected,return_origin:$('#returnOrigin').checked,mode,start_time:localHHMM(),stops:selected.map(id=>{const rq=(state.requestSelection||[]).find(r=>r.pev_id===id);return {pev_id:id,request_id:rq?.id||null,priority:priorities[id]||'normal',service_type:state.plannerServiceTypes?.[id]||'collection',window_start:rq?.window_start||'',window_end:rq?.window_end||'',exact_time:state.plannerExactTimes?.[id]||rq?.exact_time||''};})}});
     state.routePreview=data; drawRoutePreview();
   } catch(e){$('#routePreview').innerHTML=`<div class="warning">${esc(e.message)}</div>`;}
 }
@@ -487,7 +479,7 @@ function drawRoutePreview(){
   const d=state.routePreview; if(!d)return;
   $('#routePreview').innerHTML=`
     <div class="summary-strip"><div class="summary-box"><span>Distância</span><strong>${fmtKm(d.total_distance_m)}</strong></div><div class="summary-box"><span>Deslocamento</span><strong>${fmtDuration(d.total_duration_s)}</strong></div><div class="summary-box"><span>Paradas</span><strong>${d.stops.length}</strong></div></div>
-    <div class="route-preview">${d.stops.map(s=>`<div class="route-stop"><div class="stop-number">${s.sequence}</div><div><strong>${esc((s.pev||s).name)}</strong><div class="stop-meta">${fmtKm(s.distance_m)} • ${fmtDuration(s.duration_s)} • ${esc((s.pev||s).city)}/${esc((s.pev||s).state)}</div></div><span class="badge ${s.priority}">${priorityLabel[s.priority]}</span></div>`).join('')}</div>
+    <div class="route-preview">${d.stops.map(s=>`<div class="route-stop"><div class="stop-number">${s.sequence}</div><div><strong>${esc((s.pev||s).name)}</strong><div class="stop-meta">${fmtKm(s.distance_m)} • ${fmtDuration(s.duration_s)} • ${esc((s.pev||s).city)}/${esc((s.pev||s).state)}<br><strong>${esc(serviceTypeLabel[s.service_type||'collection'])}</strong>${s.exact_time?` • Horário: ${esc(s.exact_time)}`:''}</div></div><span class="badge ${s.priority}">${priorityLabel[s.priority]}</span></div>`).join('')}</div>
     <div class="info">A sequência fica sob controle do sistema. O motorista abre Google Maps ou Waze apenas para a próxima parada.</div>
     <div class="form-actions"><button id="saveDraft" class="btn primary">Salvar como rascunho</button></div>`;
   $('#saveDraft').onclick=saveDraft;
@@ -497,7 +489,7 @@ async function saveDraft(){
   const driver_id=$('#routeDriver').value; if(!driver_id)return toast('Selecione o motorista.','error');
   const d=state.routePreview;
   const reqs=state.requestSelection||[]; const reqByPev=Object.fromEntries(reqs.map(r=>[r.pev_id,r]));
-  const body={name:$('#routeName').value,route_date:$('#routeDate').value,driver_id,return_origin:$('#returnOrigin').checked,total_distance_m:d.total_distance_m,total_duration_s:d.total_duration_s,request_ids:reqs.map(r=>r.id),stops:d.stops.map(s=>{const p=s.pev||s;const rq=reqByPev[p.id];return {pev_id:p.id,request_id:rq?.id||s.request_id||null,priority:s.priority,distance_m:s.distance_m,duration_s:s.duration_s,window_start:rq?.window_start||p.service_start||'',window_end:rq?.window_end||p.service_end||'',exact_time:rq?.exact_time||s.exact_time||''};})};
+  const body={name:$('#routeName').value,route_date:$('#routeDate').value,driver_id,return_origin:$('#returnOrigin').checked,total_distance_m:d.total_distance_m,total_duration_s:d.total_duration_s,request_ids:reqs.map(r=>r.id),stops:d.stops.map(s=>{const p=s.pev||s;const rq=reqByPev[p.id];return {pev_id:p.id,request_id:rq?.id||s.request_id||null,priority:s.priority,service_type:s.service_type||state.plannerServiceTypes?.[p.id]||'collection',distance_m:s.distance_m,duration_s:s.duration_s,window_start:rq?.window_start||p.service_start||'',window_end:rq?.window_end||p.service_end||'',exact_time:s.exact_time||state.plannerExactTimes?.[p.id]||rq?.exact_time||''};})};
   try { const route=await api('/api/routes',{method:'POST',body}); state.requestSelection=[]; toast('Rota salva como rascunho. Solicitações vinculadas à rota.','success'); openRoute(route.id); } catch(e){toast(e.message,'error');}
 }
 
@@ -508,6 +500,16 @@ async function renderRoutes() {
   if($('#newRoute'))$('#newRoute').onclick=()=>go('planner'); bindRouteOpeners();
 }
 
+function routeTimelineHtml(r){
+  const events=r.timeline||[];
+  const done=r.stops.filter(s=>['completed','failed','skipped'].includes(s.status)).length;
+  const current=r.stops.find(s=>['arrived','pending'].includes(s.status));
+  const last=events[events.length-1];
+  const summary=`<div class="route-live-summary"><div><span>Início</span><strong>${r.started_at?fmtDateTime(r.started_at):'Não iniciada'}</strong></div><div><span>Última atualização</span><strong>${last?.at?fmtDateTime(last.at):'—'}</strong></div><div><span>Parada atual</span><strong>${current?esc(current.pev_name):r.status==='finished'?'Rota finalizada':'—'}</strong></div><div><span>Progresso</span><strong>${done} de ${r.stops.length}</strong></div></div>`;
+  const list=events.length?`<div class="execution-timeline">${events.map(e=>`<div class="execution-event ${esc(e.type)}"><div class="execution-time">${e.at?new Date(e.at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'—'}</div><div class="execution-dot"></div><div class="execution-body"><strong>${esc(e.label)}</strong>${e.reason?`<span>Motivo: ${esc(e.reason)}</span>`:''}${e.note?`<span>Observação: ${esc(e.note)}</span>`:''}${e.arrived_at&&e.at?`<span>Tempo no local: ${Math.max(0,Math.round((new Date(e.at)-new Date(e.arrived_at))/60000))} min</span>`:''}</div></div>`).join('')}</div>`:'<div class="empty">Nenhum evento operacional registrado ainda.</div>';
+  return `${summary}${list}`;
+}
+
 async function openRoute(id) {
   try {
     const r=await api(`/api/routes/${id}`);
@@ -515,9 +517,11 @@ async function openRoute(id) {
     const canDelete=state.user.role==='admin';
     const dlg=modal(`<div class="modal-box"><div class="modal-head"><div><span class="eyebrow">Rota #${r.id}</span><h2>${esc(r.name)}</h2><p class="muted">${fmtDate(r.route_date)} • ${esc(r.driver_name)}</p></div><button class="icon-btn modal-close">×</button></div>
       <div class="summary-strip"><div class="summary-box"><span>Status</span><strong>${statusLabel[r.status]}</strong></div><div class="summary-box"><span>Distância</span><strong>${fmtKm(r.total_distance_m)}</strong></div><div class="summary-box"><span>Tempo estimado</span><strong>${fmtDuration(r.total_duration_s)}</strong></div></div>
-      <div class="route-preview">${r.stops.map(s=>`<div class="route-stop"><div class="stop-number">${s.sequence}</div><div><strong>${esc(s.pev_name)}</strong><div class="stop-meta">${esc(s.street)}, ${esc(s.number||'s/n')} • ${esc(s.city)}/${esc(s.state)}${s.contact_name?`<br>Responsável: ${esc(s.contact_name)} ${s.phone?`• ${esc(s.phone)}`:''}`:''}${s.exact_time?`<br><strong>Horário específico: ${esc(s.exact_time)}</strong>`:''}</div></div><span class="badge ${s.status==='failed'?'failed':s.priority}">${s.status==='completed'?'Concluída':s.status==='failed'?'Não realizada':priorityLabel[s.priority]}</span></div>`).join('')}</div>
-      ${r.schedule_warnings?.length?`<div class="warning"><strong>Atenção ao horário</strong><br>${r.schedule_warnings.map(esc).join('<br>')}</div>`:''}${r.started_at?`<div class="info">Início: ${fmtDateTime(r.started_at)}${r.finished_at?` • Fim: ${fmtDateTime(r.finished_at)}`:''}</div>`:''}
+      <div class="route-preview">${r.stops.map(s=>`<div class="route-stop"><div class="stop-number">${s.sequence}</div><div><strong>${esc(s.pev_name)}</strong><div class="stop-meta">${esc(s.street)}, ${esc(s.number||'s/n')} • ${esc(s.city)}/${esc(s.state)}${s.contact_name?`<br>Responsável: ${esc(s.contact_name)} ${s.phone?`• ${esc(s.phone)}`:''}`:''}<br><strong>${esc(serviceTypeLabel[s.service_type||'collection'])}</strong>${s.exact_time?` • Horário específico: ${esc(s.exact_time)}`:''}</div></div><span class="badge ${s.status==='failed'?'failed':s.priority}">${s.status==='completed'?'Concluída':s.status==='failed'?'Não realizada':priorityLabel[s.priority]}</span></div>`).join('')}</div>
+      ${r.schedule_warnings?.length?`<div class="warning"><strong>Atenção ao horário</strong><br>${r.schedule_warnings.map(esc).join('<br>')}</div>`:''}<div class="card route-monitor-card"><div class="route-monitor-head"><div><span class="eyebrow">Motorista → Administração</span><h3>Acompanhamento da rota</h3></div>${r.status==='in_progress'?'<span class="live-pill">● AO VIVO</span>':''}</div><div id="routeLiveTimeline">${routeTimelineHtml(r)}</div></div>
       <div class="form-actions"><button class="btn ghost modal-close">Fechar</button>${canDelete?'<button id="deleteRoute" class="btn danger">Excluir rota</button>':''}${canRelease?'<button id="releaseRoute" class="btn success">Liberar para motorista</button>':''}</div></div>`);
+    let liveTimer=null;
+    if(r.status==='in_progress'){liveTimer=setInterval(async()=>{if(!dlg.open){clearInterval(liveTimer);return}try{const fresh=await api(`/api/routes/${r.id}`);const el=$('#routeLiveTimeline');if(el)el.innerHTML=routeTimelineHtml(fresh);}catch(_){ }},8000);dlg.addEventListener('close',()=>liveTimer&&clearInterval(liveTimer),{once:true});}
     if(canDelete)$('#deleteRoute').onclick=async()=>{
       if(!confirm(`Excluir DEFINITIVAMENTE a rota "${r.name}"?\n\nA rota pode estar liberada, em andamento ou finalizada. Esta ação não pode ser desfeita.`))return;
       const reason=prompt('Informe o motivo da exclusão:','')?.trim();if(!reason)return;
@@ -525,16 +529,6 @@ async function openRoute(id) {
     };
     if(canRelease)$('#releaseRoute').onclick=async()=>{if(r.schedule_warnings?.length&&!confirm(`Existe alerta de horário nesta rota:\n\n${r.schedule_warnings.join('\n')}\n\nDeseja liberar mesmo assim?`))return;try{await api(`/api/routes/${r.id}/release`,{method:'POST',body:{}});toast('Rota liberada para o motorista.','success');dlg.close();go(state.page);}catch(e){toast(e.message,'error');}};
   } catch(e){toast(e.message,'error');}
-}
-
-async function renderTemplates(){
-  [state.templates,state.pevs]=await Promise.all([api('/api/templates').then(x=>x.items),api('/api/pevs').then(x=>x.items)]);
-  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Favoritos e recorrência</span><h1>Rotas recorrentes</h1><p class="muted">Crie modelos reutilizáveis sem gerar rotas automaticamente.</p></div><button id="addTemplate" class="btn primary">+ Novo modelo</button></div><div class="card">${state.templates.length?`<div class="list">${state.templates.map(t=>`<div class="list-item"><div class="list-item-main"><strong>★ ${esc(t.name)}</strong><span>${t.pevs.length} PEVs</span></div></div>`).join('')}</div>`:'<div class="empty">Nenhum modelo salvo.</div>'}</div>`;
-  $('#addTemplate').onclick=()=>openTemplateModal();
-}
-function openTemplateModal(){
-  modal(`<form id="templateForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Modelo</span><h2>Nova rota recorrente</h2></div><button type="button" class="icon-btn modal-close">×</button></div><label class="field"><span>Nome</span><input name="name" required placeholder="Ex.: Condomínios Osmir"></label><div style="margin-top:14px" class="pev-selector">${state.pevs.map(p=>`<label class="pev-check"><input type="checkbox" value="${p.id}"><div><div class="name">${p.favorite?'★ ':''}${esc(p.name)}</div><div class="addr">${esc(p.city)}/${esc(p.state)}</div></div></label>`).join('')}</div><div class="form-actions"><button type="button" class="btn ghost modal-close">Cancelar</button><button class="btn primary">Salvar modelo</button></div></form>`);
-  $('#templateForm').onsubmit=async e=>{e.preventDefault();const ids=$$('#templateForm input[type=checkbox]:checked').map(x=>Number(x.value));try{await api('/api/templates',{method:'POST',body:{name:new FormData(e.target).get('name'),pev_ids:ids}});$('#modal').close();toast('Modelo salvo.','success');renderTemplates();}catch(err){toast(err.message,'error');}};
 }
 
 async function renderUsers(){
@@ -567,53 +561,17 @@ function resetUserPassword(id){
 
 async function renderCollectionReport(){
   if(!['admin','commercial_manager'].includes(state.user.role)) return go(state.user.role==='commercial'?'requests':'dashboard');
-  const now=new Date();
-  const y=now.getFullYear(),m=String(now.getMonth()+1).padStart(2,'0'),d=String(now.getDate()).padStart(2,'0');
-  const today=`${y}-${m}-${d}`,monthStart=`${y}-${m}-01`;
-  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Operação</span><h1>Relatório de coletas</h1><p class="muted">Acompanhe as paradas realizadas, não realizadas e pendentes por período.</p></div><div class="page-head-actions"><button id="exportCollections" class="btn secondary">Exportar CSV</button></div></div>
-    <div class="card"><div class="toolbar report-toolbar"><label class="field compact"><span>De</span><input id="reportFrom" type="date" value="${monthStart}"></label><label class="field compact"><span>Até</span><input id="reportTo" type="date" value="${today}"></label><label class="field compact"><span>Status</span><select id="reportStatus"><option value="all">Todos</option><option value="completed">Realizadas</option><option value="failed">Não realizadas</option><option value="pending">Pendentes</option><option value="arrived">No local</option><option value="skipped">Puladas</option></select></label><label class="field compact"><span>Motorista</span><select id="reportDriver"><option value="all">Todos</option></select></label><label class="field compact report-search"><span>Pesquisar</span><input id="reportSearch" class="search" placeholder="PEV, cidade, rota ou motorista"></label><button id="loadCollectionsReport" class="btn primary">Atualizar</button></div></div>
-    <div id="collectionReportContent"><div class="empty">Carregando relatório...</div></div>`;
-
+  const now=new Date();const y=now.getFullYear(),m=String(now.getMonth()+1).padStart(2,'0'),d=String(now.getDate()).padStart(2,'0');const today=`${y}-${m}-${d}`,monthStart=`${y}-${m}-01`;
+  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Operação</span><h1>Relatório operacional</h1><p class="muted">Consulte o histórico de coletas e entregas por PEV, rota e período.</p></div><div class="page-head-actions"><button id="exportCollectionsPdf" class="btn primary">Exportar PDF profissional</button><button id="exportCollections" class="btn secondary">Exportar CSV</button></div></div>
+    <div class="card"><div class="toolbar report-toolbar"><label class="field compact"><span>De</span><input id="reportFrom" type="date" value="${monthStart}"></label><label class="field compact"><span>Até</span><input id="reportTo" type="date" value="${today}"></label><label class="field compact"><span>PEV / Condomínio</span><select id="reportPev"><option value="all">Todos</option></select></label><label class="field compact"><span>Rota</span><select id="reportRoute"><option value="all">Todas</option></select></label><label class="field compact"><span>Tipo</span><select id="reportServiceType"><option value="all">Todos</option><option value="collection">Coleta</option><option value="delivery">Entrega</option></select></label><label class="field compact"><span>Status</span><select id="reportStatus"><option value="all">Todos</option><option value="completed">Realizadas</option><option value="failed">Não realizadas</option><option value="pending">Pendentes</option><option value="arrived">No local</option></select></label><button id="loadCollectionsReport" class="btn primary">Atualizar período</button></div></div>
+    <div id="collectionReportContent"></div>`;
   let raw=[];
-  const load=async()=>{
-    const from=$('#reportFrom').value,to=$('#reportTo').value;
-    if(!from||!to)return toast('Informe o período.','error');
-    $('#collectionReportContent').innerHTML='<div class="empty">Carregando relatório...</div>';
-    try{
-      raw=(await api(`/api/reports/collections?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)).items||[];
-      const current=$('#reportDriver').value;
-      const drivers=[...new Map(raw.filter(x=>x.driver_id).map(x=>[String(x.driver_id),x.driver_name||'Motorista'])).entries()].sort((a,b)=>a[1].localeCompare(b[1],'pt-BR'));
-      $('#reportDriver').innerHTML='<option value="all">Todos</option>'+drivers.map(([id,name])=>`<option value="${esc(id)}">${esc(name)}</option>`).join('');
-      if(drivers.some(([id])=>id===current))$('#reportDriver').value=current;
-      draw();
-    }catch(e){$('#collectionReportContent').innerHTML=`<div class="warning">${esc(e.message)}</div>`;}
-  };
-  const filtered=()=>{
-    const status=$('#reportStatus').value,driver=$('#reportDriver').value,q=($('#reportSearch').value||'').trim().toLowerCase();
-    return raw.filter(x=>(status==='all'||x.status===status)&&(driver==='all'||String(x.driver_id)===driver)&&`${x.pev_name} ${x.city} ${x.route_name} ${x.driver_name} ${x.requested_by_name||''} ${x.failure_reason||''}`.toLowerCase().includes(q));
-  };
-  const draw=()=>{
-    const items=filtered();
-    const completed=items.filter(x=>x.status==='completed').length,failed=items.filter(x=>['failed','skipped'].includes(x.status)).length,open=items.filter(x=>['pending','arrived'].includes(x.status)).length;
-    const rate=items.length?Math.round((completed/items.length)*100):0;
-    $('#collectionReportContent').innerHTML=`<div class="grid stats" style="margin:16px 0"><div class="card stat-card"><span>Total de paradas</span><strong>${items.length}</strong></div><div class="card stat-card"><span>Realizadas</span><strong>${completed}</strong></div><div class="card stat-card"><span>Não realizadas</span><strong>${failed}</strong></div><div class="card stat-card"><span>Em aberto</span><strong>${open}</strong></div></div><div class="card"><div class="report-summary"><strong>Taxa de realização: ${rate}%</strong></div>${items.length?`<div class="list">${items.map(x=>`<div class="list-item"><div class="list-item-main"><strong>${esc(x.pev_name||'PEV')} • ${fmtDate(x.route_date)}</strong><span>${esc(x.route_name||'Rota')} • ${esc(x.driver_name||'—')} • ${esc(x.city||'')}/${esc(x.state||'')}</span><span>${x.completed_at?`Concluída: ${fmtDateTime(x.completed_at)}`:x.arrived_at?`Chegada: ${fmtDateTime(x.arrived_at)}`:'Sem horário registrado'}${x.requested_by_name?` • Comercial: ${esc(x.requested_by_name)}`:''}${x.failure_reason?` • Motivo: ${esc(x.failure_reason)}`:''}${x.driver_note?` • Obs.: ${esc(x.driver_note)}`:''}</span></div><div class="actions"><span class="badge ${x.status}">${x.status==='completed'?'Realizada':x.status==='failed'?'Não realizada':x.status==='arrived'?'No local':x.status==='skipped'?'Pulada':'Pendente'}</span></div></div>`).join('')}</div>`:'<div class="empty">Nenhuma coleta encontrada para os filtros selecionados.</div>'}</div>`;
-  };
-  const csv=()=>{
-    const items=filtered();
-    if(!items.length)return toast('Não há dados para exportar.','error');
-    const cols=[['Data','route_date'],['Rota','route_name'],['Motorista','driver_name'],['PEV','pev_name'],['Cidade','city'],['UF','state'],['Status','status'],['Chegada','arrived_at'],['Conclusão','completed_at'],['Comercial','requested_by_name'],['Motivo','failure_reason'],['Observação','driver_note']];
-    const cell=v=>`"${String(v??'').replace(/"/g,'""')}"`;
-    const lines=[cols.map(c=>cell(c[0])).join(';'),...items.map(x=>cols.map(([_,k])=>cell(k==='route_date'?fmtDate(x[k]):['arrived_at','completed_at'].includes(k)&&x[k]?fmtDateTime(x[k]):k==='status'?(x[k]==='completed'?'Realizada':x[k]==='failed'?'Não realizada':x[k]==='arrived'?'No local':x[k]==='skipped'?'Pulada':'Pendente'):x[k])).join(';'))];
-    const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`relatorio-coletas-${$('#reportFrom').value}-a-${$('#reportTo').value}.csv`;a.click();URL.revokeObjectURL(a.href);
-  };
-  $('#loadCollectionsReport').onclick=load;$('#reportStatus').onchange=draw;$('#reportDriver').onchange=draw;$('#reportSearch').oninput=draw;$('#exportCollections').onclick=csv;
-  await load();
-}
-
-function openPasswordModal(forced=false){
-  const dlg=modal(`<form id="myPasswordForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Segurança</span><h2>${forced?'Troca obrigatória de senha':'Alterar minha senha'}</h2></div>${forced?'':'<button type="button" class="icon-btn modal-close">×</button>'}</div><label class="field"><span>Senha atual</span><input name="current_password" type="password" required></label><label class="field" style="margin-top:12px"><span>Nova senha</span><input name="new_password" type="password" minlength="8" required></label><label class="field" style="margin-top:12px"><span>Confirmar nova senha</span><input name="confirm_password" type="password" minlength="8" required></label>${forced?'<div class="warning" style="margin-top:12px">Sua senha foi criada ou redefinida pelo Administrador. Para continuar, defina uma senha pessoal.</div>':''}<div class="form-actions">${forced?'':'<button type="button" class="btn ghost modal-close">Cancelar</button>'}<button class="btn primary">Salvar nova senha</button></div></form>`);
-  if(forced)dlg.addEventListener('cancel',e=>e.preventDefault(),{once:true});
-  $('#myPasswordForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.target),n=String(fd.get('new_password')),c=String(fd.get('confirm_password'));if(n!==c)return toast('As novas senhas não coincidem.','error');try{await api('/api/change-password',{method:'POST',body:{current_password:fd.get('current_password'),new_password:n}});state.user.must_change_password=false;dlg.close();toast('Senha alterada.','success');}catch(err){toast(err.message,'error')}};
+  const load=async()=>{try{const from=$('#reportFrom').value,to=$('#reportTo').value;if(!from||!to)return toast('Informe o período.','error');raw=(await api(`/api/reports/collections?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)).items||[];const pevCurrent=$('#reportPev').value,routeCurrent=$('#reportRoute').value;const pevs=[...new Map(raw.map(x=>[String(x.pev_id),x.pev_name||'PEV'])).entries()].sort((a,b)=>a[1].localeCompare(b[1]));const routes=[...new Map(raw.map(x=>[String(x.route_id),x.route_name||`Rota ${x.route_id}`])).entries()].sort((a,b)=>a[1].localeCompare(b[1]));$('#reportPev').innerHTML='<option value="all">Todos</option>'+pevs.map(([id,name])=>`<option value="${esc(id)}">${esc(name)}</option>`).join('');$('#reportRoute').innerHTML='<option value="all">Todas</option>'+routes.map(([id,name])=>`<option value="${esc(id)}">${esc(name)}</option>`).join('');if(pevs.some(([id])=>id===pevCurrent))$('#reportPev').value=pevCurrent;if(routes.some(([id])=>id===routeCurrent))$('#reportRoute').value=routeCurrent;draw();}catch(e){toast(e.message,'error')}};
+  const filtered=()=>{const status=$('#reportStatus').value,type=$('#reportServiceType').value,pev=$('#reportPev').value,route=$('#reportRoute').value;return raw.filter(x=>(status==='all'||x.status===status)&&(type==='all'||(x.service_type||'collection')===type)&&(pev==='all'||String(x.pev_id)===pev)&&(route==='all'||String(x.route_id)===route));};
+  const draw=()=>{const items=filtered(),completed=items.filter(x=>x.status==='completed').length,failed=items.filter(x=>x.status==='failed').length,collections=items.filter(x=>(x.service_type||'collection')==='collection').length,deliveries=items.length-collections,rate=items.length?Math.round(completed/items.length*1000)/10:0,pev=$('#reportPev').value,selected=items[0];$('#collectionReportContent').innerHTML=`<div class="report-kpis"><div class="report-kpi"><span>Total de visitas</span><strong>${items.length}</strong></div><div class="report-kpi"><span>Coletas</span><strong>${collections}</strong></div><div class="report-kpi"><span>Entregas</span><strong>${deliveries}</strong></div><div class="report-kpi"><span>Realizadas</span><strong>${completed}</strong></div><div class="report-kpi danger"><span>Não realizadas</span><strong>${failed}</strong></div><div class="report-kpi"><span>Taxa de realização</span><strong>${String(rate).replace('.',',')}%</strong></div></div>${pev!=='all'?`<div class="selected-pev-report"><div><span class="eyebrow">PEV selecionado</span><h2>${esc(selected?.pev_name||'PEV')}</h2><p>${esc(selected?.city||'')}/${esc(selected?.state||'')}</p></div><div><span>Total de visitas</span><strong>${items.length}</strong></div><div><span>Total de coletas</span><strong>${collections}</strong></div><div><span>Total de entregas</span><strong>${deliveries}</strong></div><div><span>Última visita</span><strong>${items.length?fmtDate([...items].sort((a,b)=>String(b.route_date).localeCompare(String(a.route_date)))[0].route_date):'—'}</strong></div></div>`:''}<div class="card"><div class="table-wrap"><table><thead><tr><th>Data</th><th>Tipo</th><th>PEV / Local</th><th>Rota</th><th>Status</th><th>Observação</th></tr></thead><tbody>${items.length?items.map(x=>`<tr><td>${fmtDate(x.route_date)}</td><td><span class="badge ${x.service_type==='delivery'?'released':'finished'}">${esc(serviceTypeLabel[x.service_type||'collection'])}</span></td><td><strong>${esc(x.pev_name||'PEV')}</strong><br><span class="muted">${esc(x.city||'')}/${esc(x.state||'')}</span></td><td>${esc(x.route_name||'Rota')}</td><td><span class="badge ${x.status}">${x.status==='completed'?'Realizada':x.status==='failed'?'Não realizada':x.status==='arrived'?'No local':'Pendente'}</span></td><td>${esc(x.failure_reason||x.driver_note||'—')}</td></tr>`).join(''):`<tr><td colspan="6"><div class="empty">Nenhum registro encontrado para os filtros selecionados.</div></td></tr>`}</tbody></table></div></div>`;};
+  const csv=()=>{const items=filtered();if(!items.length)return toast('Não há dados para exportar.','error');const lines=[['Data','Tipo','PEV / Local','Rota','Status','Observação'],...items.map(x=>[x.route_date,serviceTypeLabel[x.service_type||'collection'],x.pev_name,x.route_name,x.status==='completed'?'Realizada':x.status==='failed'?'Não realizada':x.status,x.failure_reason||x.driver_note||''])].map(row=>row.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(';'));const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`relatorio-operacional-${$('#reportFrom').value}-a-${$('#reportTo').value}.csv`;a.click();URL.revokeObjectURL(a.href);};
+  const pdf=()=>{const qs=new URLSearchParams({from:$('#reportFrom').value,to:$('#reportTo').value,status:$('#reportStatus').value,service_type:$('#reportServiceType').value,pev:$('#reportPev').value,route:$('#reportRoute').value});window.open(`/api/reports/collections/pdf?${qs.toString()}`,'_blank');};
+  $('#loadCollectionsReport').onclick=load;['reportStatus','reportServiceType','reportPev','reportRoute'].forEach(id=>$('#'+id).onchange=draw);$('#exportCollectionsPdf').onclick=pdf;$('#exportCollections').onclick=csv;await load();
 }
 
 async function renderSettings(){
@@ -654,6 +612,7 @@ function driverNextStopHtml(s){
   const addr=`${esc(s.street)}, ${esc(s.number||'s/n')}${s.complement?` - ${esc(s.complement)}`:''}<br>${s.district?`${esc(s.district)} • `:''}${esc(s.city)}/${esc(s.state)}`;
   return `<div class="card next-stop"><span class="eyebrow">Próxima parada • ${s.sequence}</span><h2>${esc(s.pev_name)}</h2><div class="next-stop-address">${addr}</div>
     ${s.contact_name||s.phone?`<div class="contact-box"><strong>Responsável</strong><div>${esc(s.contact_name||'Não informado')}${s.contact_role?` • ${esc(s.contact_role)}`:''}</div>${s.phone?`<div style="margin-top:4px">${esc(s.phone)}</div>`:''}<div class="actions" style="margin-top:9px">${s.phone?`<a class="btn secondary small" href="${phoneHref(s.phone)}">Ligar</a>`:''}${s.phone&&s.whatsapp?`<a class="btn success small" target="_blank" href="${whatsHref(s.phone)}">WhatsApp</a>`:''}</div></div>`:''}
+    <div class="info"><strong>Tipo de atendimento: ${esc(serviceTypeLabel[s.service_type||'collection'])}</strong></div>
     ${s.exact_time?`<div class="warning"><strong>Horário específico de hoje: ${esc(s.exact_time)}</strong><br>Esta parada foi agendada para esse horário.</div>`:(s.window_start||s.window_end?`<div class="info">Horário do local: ${esc(s.window_start||'—')} até ${esc(s.window_end||'—')}</div>`:'')}
     ${s.notes?`<div class="warning" style="margin-top:9px">${esc(s.notes)}</div>`:''}
     <div class="driver-actions"><button id="googleNav" class="btn blue">Google Maps</button><button id="wazeNav" class="btn secondary">Waze</button>${s.status==='pending'?'<button id="arriveStop" class="btn secondary full">Cheguei ao local</button>':''}<button id="completeStop" class="btn success full">✓ Finalizar parada</button><button id="failStop" class="btn danger">Não realizada</button><button id="recalcRoute" class="btn ghost">Recalcular restante</button></div></div>`;

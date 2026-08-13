@@ -30,4 +30,3 @@ echo Se aparecer MAIS DE UM PID em 0.0.0.0:8080, feche todos os servidores
 echo Rota Proxima e execute novamente INICIAR_ROTA_PROXIMA.bat.
 echo.
 pause
-

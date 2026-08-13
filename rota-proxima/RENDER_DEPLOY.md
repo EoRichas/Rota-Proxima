@@ -38,4 +38,3 @@ Deve retornar JSON contendo:
 - `render: true`
 
 Depois abra a raiz do endereço e faça login normalmente.
-

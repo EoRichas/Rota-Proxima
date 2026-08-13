@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-import json, math, mimetypes, os, urllib.parse, urllib.request, time, threading
+import io, json, math, mimetypes, os, urllib.parse, urllib.request, time, threading
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, LongTable, TableStyle, Table, Image
 
 BASE_DIR=Path(__file__).resolve().parent
 STATIC_DIR=BASE_DIR/'static'
@@ -21,7 +26,8 @@ AUTH=f'{SUPABASE_URL}/auth/v1'
 ADMIN_FN=f'{SUPABASE_URL}/functions/v1/rota-admin'
 USER_AGENT='RotaProxima/3.0'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
-BUILD_ID='SP-RENDER-PREMIUM-UI-2026-08-12'
+SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
+BUILD_ID='SP-RENDER-RELATORIO-MONITORAMENTO-2026-08-13'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -210,6 +216,114 @@ def optimize_order_with_exact_times(dist,durations,priorities,exact_times,start_
         clock+=(durations[cur][nxt] or 0)/60;order.append(nxt);remaining.remove(nxt);cur=nxt
     return order,warnings
 
+
+def collection_report_items(token,date_from,date_to):
+    routes=Supa.get('routes',token,{
+        'select':'id,name,route_date,status,driver_id,profiles!routes_driver_id_fkey(name)',
+        'and':f'(route_date.gte.{date_from},route_date.lte.{date_to})',
+        'order':'route_date.desc,id.desc'
+    })
+    if not routes:return []
+    route_map={int(r['id']):r for r in routes};ids=','.join(str(x) for x in route_map)
+    stops=Supa.get('route_stops',token,{
+        'route_id':f'in.({ids})',
+        'select':'id,route_id,pev_id,request_id,sequence,status,service_type,exact_time,arrived_at,completed_at,failure_reason,driver_note,pevs(name,street,number,district,city,state,cep,contact_name,phone),scheduling_requests(requested_by,profiles!scheduling_requests_requested_by_fkey(name))',
+        'order':'route_id.desc,sequence.asc'
+    })
+    items=[]
+    for st in stops:
+        r=route_map.get(int(st['route_id'])) or {};drv=r.get('profiles') or {};pev=st.pop('pevs',{}) or {};req=st.pop('scheduling_requests',{}) or {};commercial=req.get('profiles') or {}
+        items.append({
+            **st,'route_name':r.get('name',''),'route_date':r.get('route_date'),'route_status':r.get('status'),
+            'driver_id':r.get('driver_id'),'driver_name':drv.get('name',''),
+            'pev_name':pev.get('name',''),'street':pev.get('street',''),'number':pev.get('number',''),'district':pev.get('district',''),
+            'city':pev.get('city',''),'state':pev.get('state',''),'cep':pev.get('cep',''),'contact_name':pev.get('contact_name',''),'contact_phone':pev.get('phone',''),
+            'requested_by_name':commercial.get('name','')
+        })
+    return items
+
+def filter_collection_report(items,status='all',service_type='all',search='',pev='all',route='all'):
+    q=(search or '').strip().lower()
+    out=[]
+    for x in items:
+        if status!='all' and x.get('status')!=status:continue
+        if service_type!='all' and x.get('service_type','collection')!=service_type:continue
+        if pev!='all' and str(x.get('pev_id') or '')!=str(pev):continue
+        if route!='all' and str(x.get('route_id') or '')!=str(route):continue
+        if q:
+            hay=' '.join(str(x.get(k) or '') for k in ('pev_name','city','state','route_name','requested_by_name','failure_reason','driver_note')).lower()
+            if q not in hay:continue
+        out.append(x)
+    return out
+
+def _pdf_text(v):
+    return str(v or '').replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+
+def build_collections_pdf(items,date_from,date_to,filters=None):
+    filters=filters or {}
+    buf=io.BytesIO();styles=getSampleStyleSheet()
+    green=colors.HexColor('#0B4F2F');green2=colors.HexColor('#176B43');gold=colors.HexColor('#B8860B')
+    pale=colors.HexColor('#F5F8F5');line=colors.HexColor('#D8E0DA');muted=colors.HexColor('#5E6862');red=colors.HexColor('#A23A2A')
+    title=ParagraphStyle('ReportTitle',parent=styles['Title'],fontName='Helvetica-Bold',fontSize=23,leading=27,textColor=green,spaceAfter=5)
+    subtitle=ParagraphStyle('Subtitle',parent=styles['BodyText'],fontName='Helvetica',fontSize=8.5,leading=11,textColor=muted)
+    small=ParagraphStyle('Small',parent=styles['BodyText'],fontName='Helvetica',fontSize=7.2,leading=9,textColor=colors.HexColor('#25312B'))
+    small_b=ParagraphStyle('SmallB',parent=small,fontName='Helvetica-Bold',textColor=green)
+    kpi_label=ParagraphStyle('KpiLabel',parent=small,fontName='Helvetica-Bold',fontSize=7.2,alignment=TA_CENTER,textColor=muted)
+    kpi_num=ParagraphStyle('KpiNum',parent=styles['BodyText'],fontName='Helvetica-Bold',fontSize=17,leading=19,alignment=TA_CENTER,textColor=green)
+    doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=28,leftMargin=28,topMargin=24,bottomMargin=34,title='Relatório Operacional de Coletas e Entregas - Cassola Ambiental')
+
+    total=len(items);collections=sum(1 for x in items if x.get('service_type','collection')=='collection');deliveries=total-collections
+    completed=sum(1 for x in items if x.get('status')=='completed');failed=sum(1 for x in items if x.get('status')=='failed');rate=round((completed/total*100),1) if total else 0
+    logo_path=os.path.join(STATIC_DIR,'cassola-logo.jpeg')
+    logo=Image(logo_path,width=80,height=80) if os.path.exists(logo_path) else Paragraph('CASSOLA AMBIENTAL',small_b)
+    issue=datetime.now().strftime('%d/%m/%Y %H:%M')
+    header_right=Table([[Paragraph('CASSOLA AMBIENTAL',ParagraphStyle('Brand',parent=title,fontSize=14,leading=16)),Paragraph(f'<b>Emitido:</b> {issue}',small)],
+                        [Paragraph('Tecnologia e sustentabilidade na operação.',ParagraphStyle('BrandSub',parent=subtitle,textColor=gold)),Paragraph(f'<b>Período:</b> {date_from} a {date_to}',small)],
+                        [Paragraph('Relatório Operacional de<br/>Coletas e Entregas',title),'']],colWidths=[330,135])
+    header_right.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('ALIGN',(1,0),(1,-1),'RIGHT'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),('TOPPADDING',(0,0),(-1,-1),1),('BOTTOMPADDING',(0,0),(-1,-1),1)]))
+    head=Table([[logo,header_right]],colWidths=[92,465]);head.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LINEBELOW',(0,0),(-1,-1),1,gold),('BOTTOMPADDING',(0,0),(-1,-1),10)]))
+
+    status_map={'all':'Todos','completed':'Realizadas','failed':'Não realizadas','pending':'Pendentes','arrived':'No local','skipped':'Puladas'}
+    type_map={'all':'Todos','collection':'Coleta','delivery':'Entrega'}
+    pev_name='Todos'; route_name='Todas'
+    if filters.get('pev') not in (None,'','all') and items: pev_name=items[0].get('pev_name') or 'PEV selecionada'
+    if filters.get('route') not in (None,'','all') and items: route_name=items[0].get('route_name') or 'Rota selecionada'
+    filter_data=[[Paragraph('<b>FILTROS APLICADOS</b>',small_b),Paragraph(f'<b>Período</b><br/>{date_from} a {date_to}',small),Paragraph(f'<b>PEV / Condomínio</b><br/>{_pdf_text(pev_name)}',small),Paragraph(f'<b>Rota</b><br/>{_pdf_text(route_name)}',small),Paragraph(f'<b>Tipo</b><br/>{type_map.get(filters.get("service_type","all"),"Todos")}',small),Paragraph(f'<b>Status</b><br/>{status_map.get(filters.get("status","all"),"Todos")}',small)]]
+    filter_table=Table(filter_data,colWidths=[85,95,135,95,70,77]);filter_table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),pale),('BOX',(0,0),(-1,-1),.6,line),('INNERGRID',(1,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+
+    kpis=[('Total de visitas',total),('Coletas',collections),('Entregas',deliveries),('Realizadas',completed),('Não realizadas',failed),('Taxa de realização',f'{rate:.1f}%'.replace('.',','))]
+    krow=[]
+    for label,value in kpis:krow.append(Table([[Paragraph(label,kpi_label)],[Paragraph(str(value),kpi_num)]],colWidths=[87],rowHeights=[22,27]))
+    kpi_table=Table([krow],colWidths=[91]*6);kpi_table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),2),('RIGHTPADDING',(0,0),(-1,-1),2)]))
+
+    story=[head,Spacer(1,12),filter_table,Spacer(1,12),kpi_table,Spacer(1,12)]
+    if filters.get('pev') not in (None,'','all'):
+        last=max((x for x in items if x.get('route_date')),key=lambda x:(str(x.get('route_date')),str(x.get('completed_at') or x.get('arrived_at') or '')),default=None)
+        selected=Table([[Paragraph('<b>PEV SELECIONADO</b><br/><font size="12"><b>'+_pdf_text(pev_name)+'</b></font>',small),Paragraph(f'<b>Total de visitas</b><br/><font size="15"><b>{total}</b></font>',small),Paragraph(f'<b>Total de coletas</b><br/><font size="15"><b>{collections}</b></font>',small),Paragraph(f'<b>Total de entregas</b><br/><font size="15"><b>{deliveries}</b></font>',small),Paragraph(f'<b>Última visita</b><br/>{_pdf_text((last or {}).get("route_date") or "-")}',small)]],colWidths=[210,85,85,85,92])
+        selected.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#F1F7F2')),('BOX',(0,0),(-1,-1),.7,colors.HexColor('#BFD3C5')),('INNERGRID',(1,0),(-1,-1),.35,colors.HexColor('#CAD8CE')),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
+        story += [selected,Spacer(1,12)]
+
+    header=['Data','Tipo','PEV / Local','Rota','Status','Observação']
+    rows=[[Paragraph(h,ParagraphStyle('TH',parent=small_b,textColor=colors.white,alignment=TA_CENTER)) for h in header]]
+    status_label={'completed':'Realizada','failed':'Não realizada','arrived':'No local','skipped':'Pulada','pending':'Pendente'}
+    for x in items:
+        note=x.get('failure_reason') or x.get('driver_note') or ''
+        rows.append([Paragraph(_pdf_text(x.get('route_date')),small),Paragraph(_pdf_text(SERVICE_TYPE_LABEL.get(x.get('service_type','collection'),'Coleta')),small),Paragraph(_pdf_text(x.get('pev_name')),small),Paragraph(_pdf_text(x.get('route_name')),small),Paragraph(_pdf_text(status_label.get(x.get('status'),x.get('status'))),small),Paragraph(_pdf_text(note),small)])
+    table=LongTable(rows,repeatRows=1,colWidths=[62,60,150,92,82,111])
+    style=[('BACKGROUND',(0,0),(-1,0),green),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),0.3,line),('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]
+    for i,x in enumerate(items,start=1):
+        if x.get('status')=='failed': style.append(('TEXTCOLOR',(4,i),(4,i),red))
+        elif x.get('status')=='completed': style.append(('TEXTCOLOR',(4,i),(4,i),green2))
+        if i%2==0: style.append(('BACKGROUND',(0,i),(-1,i),colors.HexColor('#FAFCFA')))
+    table.setStyle(TableStyle(style));story.append(table)
+
+    def footer(canvas,doc):
+        canvas.saveState();w,h=A4
+        canvas.setStrokeColor(gold);canvas.setLineWidth(.6);canvas.line(28,24,w-28,24)
+        canvas.setFont('Helvetica',7);canvas.setFillColor(muted);canvas.drawString(28,12,'Cassola Ambiental - Relatório operacional gerado pelo Rota Próxima')
+        canvas.drawRightString(w-28,12,f'Página {doc.page}');canvas.restoreState()
+    doc.build(story,onFirstPage=footer,onLaterPages=footer);return buf.getvalue()
+
 class SupaHTTPError(RuntimeError):
     def __init__(self,status,message):
         super().__init__(message)
@@ -303,7 +417,27 @@ def get_route_full(token,route_id):
         p=s.pop('pevs',{}) or {};rq=s.pop('scheduling_requests',{}) or {}
         x={**s,'pev_name':p.get('name'),'street':p.get('street'),'number':p.get('number'),'complement':p.get('complement'),'district':p.get('district'),'city':p.get('city'),'state':p.get('state'),'cep':p.get('cep'),'lat':p.get('lat'),'lng':p.get('lng'),'location_confirmed':p.get('location_confirmed'),'contact_name':p.get('contact_name'),'contact_role':p.get('contact_role'),'phone':p.get('phone'),'whatsapp':p.get('whatsapp'),'notes':p.get('notes'),'exact_time':s.get('exact_time') or rq.get('exact_time') or ''}
         mapped.append(x)
-    out['stops']=mapped;out['schedule_warnings']=schedule_conflicts(mapped);return out
+    out['stops']=mapped;out['schedule_warnings']=schedule_conflicts(mapped);out['timeline']=route_timeline(token,out);return out
+
+
+def route_timeline(token,route):
+    events=[]
+    driver=route.get('driver_name') or 'Motorista'
+    if route.get('started_at'): events.append({'type':'route_started','at':route.get('started_at'),'label':f'{driver} iniciou a rota','lat':route.get('started_lat'),'lng':route.get('started_lng')})
+    for st in route.get('stops') or []:
+        name=st.get('pev_name') or 'PEV';kind=SERVICE_TYPE_LABEL.get(st.get('service_type','collection'),'Coleta')
+        if st.get('arrived_at'): events.append({'type':'stop_arrived','at':st.get('arrived_at'),'label':f'{driver} chegou em {name}','stop_id':st.get('id'),'pev_name':name,'lat':st.get('arrived_lat'),'lng':st.get('arrived_lng')})
+        if st.get('completed_at'):
+            if st.get('status')=='failed': label=f'{kind} não realizada em {name}'
+            else: label=f'{kind} concluída em {name}'
+            events.append({'type':'stop_failed' if st.get('status')=='failed' else 'stop_completed','at':st.get('completed_at'),'label':label,'stop_id':st.get('id'),'pev_name':name,'reason':st.get('failure_reason') or '','note':st.get('driver_note') or '','arrived_at':st.get('arrived_at'),'lat':st.get('completed_lat'),'lng':st.get('completed_lng')})
+    try:
+        logs=Supa.get('audit_logs',token,{'entity_type':'eq.route','entity_id':f'eq.{route.get("id")}','action':'eq.recalculate','select':'created_at,summary,metadata','order':'created_at.asc'})
+        for a in logs or []:events.append({'type':'recalculate','at':a.get('created_at'),'label':'Motorista recalculou o restante da rota','metadata':a.get('metadata') or {}})
+    except Exception:pass
+    if route.get('finished_at'): events.append({'type':'route_finished','at':route.get('finished_at'),'label':f'{driver} finalizou a rota','lat':route.get('finished_lat'),'lng':route.get('finished_lng')})
+    events.sort(key=lambda e:str(e.get('at') or ''))
+    return events
 
 def reorder_route_for_exact_times(token,route_id,start_lat=None,start_lng=None,local_time=''):
     route=get_route_full(token,route_id);pending=[s for s in route['stops'] if s['status']=='pending']
@@ -351,6 +485,11 @@ class AppHandler(BaseHTTPRequestHandler):
         raw=json.dumps(obj,ensure_ascii=False,default=str).encode();self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.common_security_headers()
         for k,v in (getattr(self,'pending_headers',[]) or []):self.send_header(k,v)
         for k,v in (extra_headers or {}).items():self.send_header(k,v)
+        self.end_headers();self.wfile.write(raw)
+    def send_bytes(self,raw,content_type='application/octet-stream',status=200,filename=None):
+        self.send_response(status);self.send_header('Content-Type',content_type);self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.common_security_headers()
+        if filename:self.send_header('Content-Disposition',f'attachment; filename="{filename}"')
+        for k,v in (getattr(self,'pending_headers',[]) or []):self.send_header(k,v)
         self.end_headers();self.wfile.write(raw)
     def auth_tokens(self):
         c=self.cookies();return c.get('rota_access'),c.get('rota_refresh')
@@ -489,13 +628,6 @@ class AppHandler(BaseHTTPRequestHandler):
                 for x in rows:
                     p=x.pop('pevs',{}) or {};pr=x.pop('profiles',{}) or {};r=x.pop('routes',{}) or {};items.append({**x,**{k:p.get(k) for k in ['street','number','district','city','state','cep','contact_name','contact_role','phone']},'pev_name':p.get('name'),'requested_by_name':pr.get('name'),'route_name':r.get('name')})
                 return self.send_json({'items':items})
-            if path=='/api/templates':
-                if role!='admin':return self.send_json({'error':'Sem permissão'},403)
-                items=[]
-                for x in Supa.get('route_templates',t,{'select':'*','order':'name.asc'}):
-                    ps=Supa.get('route_template_pevs',t,{'template_id':f'eq.{x["id"]}','select':'pev_id,priority,position,pevs(name)','order':'position.asc'})
-                    x['pevs']=[{'pev_id':z['pev_id'],'priority':z['priority'],'position':z['position'],'name':(z.get('pevs') or {}).get('name')} for z in ps];items.append(x)
-                return self.send_json({'items':items})
             if path=='/api/routes':
                 if role=='commercial':return self.send_json({'error':'Sem permissão'},403)
                 params={'select':'*,profiles!routes_driver_id_fkey(name),route_stops(id,status)','order':'route_date.desc,id.desc'}
@@ -511,7 +643,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not r:return self.send_json({'error':'Rota não encontrada'},404)
                 if role=='driver' and r['driver_id']!=u['id']:return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json(r)
-            if path=='/api/reports/collections':
+            if path in ('/api/reports/collections','/api/reports/collections/pdf'):
                 if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
                 date_from=(q.get('from') or [''])[0].strip();date_to=(q.get('to') or [''])[0].strip()
                 if not date_from or not date_to:return self.send_json({'error':'Informe o período do relatório'},400)
@@ -520,28 +652,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 except ValueError:return self.send_json({'error':'Período inválido'},400)
                 if d1>d2:return self.send_json({'error':'A data inicial não pode ser maior que a final'},400)
                 if (d2-d1).days>366:return self.send_json({'error':'O período máximo do relatório é de 367 dias'},400)
-                routes=Supa.get('routes',t,{
-                    'select':'id,name,route_date,status,driver_id,profiles!routes_driver_id_fkey(name)',
-                    'and':f'(route_date.gte.{date_from},route_date.lte.{date_to})',
-                    'order':'route_date.desc,id.desc'
-                })
-                if not routes:return self.send_json({'items':[]})
-                route_map={int(r['id']):r for r in routes};ids=','.join(str(x) for x in route_map)
-                stops=Supa.get('route_stops',t,{
-                    'route_id':f'in.({ids})',
-                    'select':'id,route_id,pev_id,request_id,sequence,status,exact_time,arrived_at,completed_at,failure_reason,driver_note,pevs(name,street,number,district,city,state,cep,contact_name,phone),scheduling_requests(requested_by,profiles!scheduling_requests_requested_by_fkey(name))',
-                    'order':'route_id.desc,sequence.asc'
-                })
-                items=[]
-                for st in stops:
-                    r=route_map.get(int(st['route_id'])) or {};drv=r.get('profiles') or {};pev=st.pop('pevs',{}) or {};req=st.pop('scheduling_requests',{}) or {};commercial=req.get('profiles') or {}
-                    items.append({
-                        **st,'route_name':r.get('name',''),'route_date':r.get('route_date'),'route_status':r.get('status'),
-                        'driver_id':r.get('driver_id'),'driver_name':drv.get('name',''),
-                        'pev_name':pev.get('name',''),'street':pev.get('street',''),'number':pev.get('number',''),'district':pev.get('district',''),
-                        'city':pev.get('city',''),'state':pev.get('state',''),'cep':pev.get('cep',''),'contact_name':pev.get('contact_name',''),'contact_phone':pev.get('phone',''),
-                        'requested_by_name':commercial.get('name','')
-                    })
+                items=collection_report_items(t,date_from,date_to)
+                if path.endswith('/pdf'):
+                    filters={'status':(q.get('status') or ['all'])[0],'service_type':(q.get('service_type') or ['all'])[0],'q':(q.get('q') or [''])[0],'pev':(q.get('pev') or ['all'])[0],'route':(q.get('route') or ['all'])[0]}
+                    items=filter_collection_report(items,filters['status'],filters['service_type'],filters['q'],filters['pev'],filters['route'])
+                    raw=build_collections_pdf(items,date_from,date_to,filters)
+                    return self.send_bytes(raw,'application/pdf',filename=f'relatorio-coletas-entregas-{date_from}-a-{date_to}.pdf')
                 return self.send_json({'items':items})
             if path in ('/api/dashboard','/api/dashboard-pending'):
                 if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
@@ -550,7 +666,7 @@ class AppHandler(BaseHTTPRequestHandler):
             if path=='/api/backup':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 dump={}
-                for table in ['settings','profiles','pevs','scheduling_requests','route_templates','route_template_pevs','routes','route_stops','audit_logs']:
+                for table in ['settings','profiles','pevs','scheduling_requests','routes','route_stops','audit_logs']:
                     dump[table]=Supa.get(table,t,{'select':'*','order':'id.asc'} if table not in ('settings','profiles') else {'select':'*'})
                 return self.send_json({'exported_at':now_iso(),'data':dump})
             return self.send_json({'error':'Endpoint não encontrado'},404)
@@ -668,11 +784,6 @@ class AppHandler(BaseHTTPRequestHandler):
                     deleted=Supa.delete('scheduling_requests',t,{'id':f'eq.{rid}'})
                     if not deleted:return self.send_json({'error':'Não foi possível excluir a solicitação'},409)
                     return self.send_json({'ok':True})
-            if path=='/api/templates' and method=='POST':
-                if role!='admin':return self.send_json({'error':'Sem permissão'},403)
-                row=Supa.insert('route_templates',t,{'name':str(data.get('name','')).strip(),'created_by':u['id']})[0]
-                for i,pid in enumerate(data.get('pev_ids') or []):Supa.insert('route_template_pevs',t,{'template_id':row['id'],'pev_id':int(pid),'priority':'normal','position':i+1})
-                audit(t,u,'create','template',row['id'],'Modelo de rota criado');return self.send_json({'id':row['id']},201)
             if path=='/api/optimize' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 ids=[int(x) for x in (data.get('pev_ids') or data.get('stop_ids') or [])]
@@ -683,7 +794,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 dist,dur,source=osrm_matrix(points);meta={int(x['pev_id']):x for x in data.get('stops') or []};legacy_pri=data.get('priorities') or {};pri={i+1:meta.get(p['id'],{}).get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal') for i,p in enumerate(items)};exact={i+1:meta.get(p['id'],{}).get('exact_time') for i,p in enumerate(items) if meta.get(p['id'],{}).get('exact_time')}
                 order,warnings=optimize_order_with_exact_times(dist,dur,pri,exact,hhmm_to_minutes(data.get('start_time')),data.get('mode','best'));prev=0;totald=totalt=0;st=[]
                 for seq,idx in enumerate(order,1):
-                    p=items[idx-1];m=meta.get(p['id'],{});d=dist[prev][idx] or 0;du=dur[prev][idx] or 0;totald+=d;totalt+=du;prev=idx;st.append({**p,'pev':p,'pev_id':p['id'],'sequence':seq,'priority':m.get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal'),'window_start':m.get('window_start') or hms(p.get('service_start')),'window_end':m.get('window_end') or hms(p.get('service_end')),'exact_time':m.get('exact_time') or '','request_id':m.get('request_id'),'distance_m':d,'duration_s':du})
+                    p=items[idx-1];m=meta.get(p['id'],{});d=dist[prev][idx] or 0;du=dur[prev][idx] or 0;totald+=d;totalt+=du;prev=idx;st.append({**p,'pev':p,'pev_id':p['id'],'sequence':seq,'priority':m.get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal'),'service_type':m.get('service_type') or 'collection','window_start':m.get('window_start') or hms(p.get('service_start')),'window_end':m.get('window_end') or hms(p.get('service_end')),'exact_time':m.get('exact_time') or '','request_id':m.get('request_id'),'distance_m':d,'duration_s':du})
                 if data.get('return_origin') and order:totald+=dist[prev][0] or 0;totalt+=dur[prev][0] or 0
                 return self.send_json({'origin':origin,'stops':st,'total_distance_m':totald,'total_duration_s':totalt,'source':source,'schedule_warnings':warnings})
             if path=='/api/routes' and method=='POST':
@@ -695,7 +806,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 for i,st in enumerate(data.get('stops') or [],1):
                     stops.append({
                         'pev_id':int(st['pev_id']),'request_id':st.get('request_id') or None,'sequence':i,
-                        'priority':st.get('priority','normal'),'window_start':st.get('window_start') or None,
+                        'priority':st.get('priority','normal'),'service_type':st.get('service_type') or 'collection','window_start':st.get('window_start') or None,
                         'window_end':st.get('window_end') or None,'exact_time':st.get('exact_time') or None,
                         'distance_m':st.get('distance_m') or 0,'duration_s':st.get('duration_s') or 0
                     })
@@ -747,9 +858,6 @@ class AppHandler(BaseHTTPRequestHandler):
             if path=='/api/settings' and method=='PUT':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 old=first(Supa.get('settings',t,{'id':'eq.1','select':'*'}));upd={k:data.get(k) for k in ['company_name','origin_name','origin_mode','origin_cep','origin_street','origin_number','origin_complement','origin_district','origin_city','origin_state']};upd['origin_lat']=num(data.get('origin_lat'));upd['origin_lng']=num(data.get('origin_lng'));upd['origin_location_confirmed']=upd['origin_lat'] is not None and upd['origin_lng'] is not None;Supa.update('settings',t,{'id':'eq.1'},upd);audit(t,u,'update','settings',1,'Configurações alteradas',old,upd);return self.send_json({'ok':True})
-            if path.startswith('/api/templates/') and method=='DELETE':
-                if role!='admin':return self.send_json({'error':'Sem permissão'},403)
-                tid=int(path.rsplit('/',1)[-1]);Supa.delete('route_templates',t,{'id':f'eq.{tid}'});audit(t,u,'delete','template',tid,'Modelo de rota excluído');return self.send_json({'ok':True})
             return self.send_json({'error':'Endpoint não encontrado'},404)
         except RuntimeError as e:
             msg=str(e);print(f'[API ERROR] {method} {path}: {msg}');status=409 if 'duplicate key' in msg.lower() or 'violates unique' in msg.lower() or 'já existe' in msg.lower() else 400;return self.send_json({'error':msg},status)
