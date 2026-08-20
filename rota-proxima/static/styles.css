@@ -609,3 +609,12 @@ hr { margin: 19px 0; border: 0; border-top: 1px solid var(--line); }
 /* Fila exclusiva de pesagens da Produção */
 .production-queue{width:min(100%,980px);margin:0 auto;display:grid;gap:16px}.production-route-card{border-top:4px solid var(--primary)}.production-route-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.production-route-head p{margin:4px 0 0}.production-weighing-form{grid-template-columns:minmax(0,1fr) minmax(180px,230px);align-items:end;padding:18px;background:#fbfdfb}.production-weighing-form .production-pev{align-self:center}.production-pev strong,.production-pev span{display:block}.production-pev strong{color:var(--text-strong);font-size:15px}.production-pev span{margin-top:4px;color:var(--muted);font-size:12px}.production-weighing-form .field{max-width:none}.production-weighing-form .evidence-box{grid-column:1/-1;margin:0}.production-weighing-form .production-save{grid-column:1/-1;justify-self:end;min-width:210px}.production-empty{width:min(100%,780px);margin:40px auto}.production-empty strong,.production-empty span{display:block}.production-empty strong{color:var(--text-strong);font-size:16px}.production-empty span{margin-top:6px}
 @media(max-width:760px){.driver-evidence-grid{grid-template-columns:1fr}.production-route-head{align-items:flex-start;flex-direction:column}.production-weighing-form{grid-template-columns:1fr}.production-weighing-form .evidence-box,.production-weighing-form .production-save{grid-column:auto}.production-weighing-form .production-save{width:100%;min-width:0}.production-waiting-count{align-items:flex-start;flex-direction:column}}
+
+/* A lista de PEVs recebe a largura inteira antes de tentar manter os três
+   controles na mesma linha. */
+@media (min-width:901px) and (max-width:1500px) {
+  .route-builder { grid-template-columns: minmax(0,1fr); }
+  .sticky-card { position: static; }
+}
+
+.pev-check input[type="time"] { min-width: 0; }

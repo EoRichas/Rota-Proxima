@@ -1,0 +1,132 @@
+/* Ajuste visual isolado da dashboard administrativa. */
+#page.dashboard-centered {
+  max-width: 1280px;
+  margin-inline: auto;
+}
+
+/* Linha superior: quatro KPIs centralizados e com espaçamento uniforme. */
+#page.dashboard-centered .dashboard-primary-stats {
+  width: 100%;
+  max-width: 1180px;
+  margin-inline: auto;
+  align-items: stretch;
+}
+
+#page.dashboard-centered .dashboard-primary-stats .stat-card {
+  min-height: 116px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 20px 16px;
+}
+
+#page.dashboard-centered .dashboard-primary-stats .stat-card > span {
+  width: 100%;
+  line-height: 1.35;
+  text-align: center;
+}
+
+#page.dashboard-centered .dashboard-primary-stats .stat-card > strong {
+  width: 100%;
+  margin-top: 8px;
+  text-align: center;
+  line-height: 1;
+}
+
+/*
+ * Central de pendências:
+ * o contêiner antigo deixa de desenhar uma caixa única.
+ * O título vira uma barra independente e os quatro KPIs abaixo
+ * passam a ser cards separados, com o mesmo espaçamento da linha superior.
+ */
+#page.dashboard-centered .dashboard-pending-card {
+  display: contents;
+}
+
+#page.dashboard-centered .dashboard-pending-card > h2 {
+  width: 100%;
+  max-width: 1180px;
+  min-height: 72px;
+  margin: 18px auto 16px;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(17,24,39,.03);
+}
+
+#page.dashboard-centered .dashboard-pending-card > .grid.stats {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  align-items: stretch;
+}
+
+#page.dashboard-centered .dashboard-pending-card > .grid.stats > .stat-card {
+  position: relative;
+  min-height: 116px;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid #b8dccc;
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(17,24,39,.03);
+  overflow: hidden;
+}
+
+#page.dashboard-centered .dashboard-pending-card .stat-card > span,
+#page.dashboard-centered .dashboard-pending-card .stat-card > strong {
+  width: 100%;
+  text-align: center;
+}
+
+#page.dashboard-centered .dashboard-pending-card .stat-card > span {
+  line-height: 1.35;
+}
+
+#page.dashboard-centered .dashboard-pending-card .stat-card > strong {
+  margin-top: 8px;
+  line-height: 1;
+}
+
+@media (max-width: 1050px) {
+  #page.dashboard-centered .dashboard-pending-card > .grid.stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  #page.dashboard-centered {
+    max-width: none;
+  }
+
+  #page.dashboard-centered .dashboard-primary-stats .stat-card,
+  #page.dashboard-centered .dashboard-pending-card > .grid.stats > .stat-card {
+    min-height: 100px;
+  }
+
+  #page.dashboard-centered .dashboard-pending-card > h2 {
+    min-height: 62px;
+    margin-top: 16px;
+    padding: 14px 16px;
+  }
+
+  #page.dashboard-centered .dashboard-pending-card > .grid.stats {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}

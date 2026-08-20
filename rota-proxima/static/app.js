@@ -216,16 +216,14 @@ async function renderDashboard() {
   const admin = state.user.role === 'admin';
   $('#page').innerHTML = `
     <div class="page-head"><div><span class="eyebrow">Operação</span><h1>Dashboard</h1><p class="muted">Acompanhamento de solicitações comerciais e rotas de hoje.</p></div><div class="page-head-actions"><button id="viewRequestsBtn" class="btn secondary">Solicitações (${pendingRequests})</button>${admin?'<button id="newRouteBtn" class="btn primary">+ Nova rota</button>':''}</div></div>
-    <div class="dashboard-layout">
-    <div class="dashboard-grid dashboard-summary-grid">
+    <div class="grid stats">
       <div class="card stat-card"><span>Solicitações pendentes</span><strong>${pendingRequests}</strong></div>
       <div class="card stat-card"><span>PEVs sem localização confirmada</span><strong>${pendingInfo.unconfirmed_locations}</strong></div>
       <div class="card stat-card"><span>Rotas em andamento</span><strong>${counts.in_progress}</strong></div>
       <div class="card stat-card"><span>Rotas finalizadas hoje</span><strong>${counts.finished}</strong></div>
     </div>
-    <div class="card dashboard-pending-card"><h2>Central de pendências</h2><div class="dashboard-grid dashboard-pending-grid"><div class="dashboard-pending-item"><span>Solicitações aguardando planejamento</span><strong>${pendingInfo.pending_requests}</strong></div><div class="dashboard-pending-item"><span>PEVs sem coordenada confirmada</span><strong>${pendingInfo.unconfirmed_locations}</strong></div><div class="dashboard-pending-item"><span>Rotas com alerta de horário</span><strong>${pendingInfo.routes_at_risk}</strong></div><div class="dashboard-pending-item"><span>Coletas não realizadas hoje</span><strong>${pendingInfo.not_completed_today}</strong></div></div></div>
-    <div class="card dashboard-routes-card"><h2>Rotas de hoje</h2>${routeListHtml(todayRoutes)}</div>
-    </div>`;
+    <div class="card" style="margin-top:16px"><h2>Central de pendências</h2><div class="grid stats"><div class="stat-card"><span>Solicitações aguardando planejamento</span><strong>${pendingInfo.pending_requests}</strong></div><div class="stat-card"><span>PEVs sem coordenada confirmada</span><strong>${pendingInfo.unconfirmed_locations}</strong></div><div class="stat-card"><span>Rotas com alerta de horário</span><strong>${pendingInfo.routes_at_risk}</strong></div><div class="stat-card"><span>Coletas não realizadas hoje</span><strong>${pendingInfo.not_completed_today}</strong></div></div></div>
+    <div class="card" style="margin-top:16px"><h2>Rotas de hoje</h2>${routeListHtml(todayRoutes)}</div>`;
   if ($('#newRouteBtn')) $('#newRouteBtn').onclick = () => go('planner');
   $('#viewRequestsBtn').onclick = () => go('requests');
   bindRouteOpeners();
