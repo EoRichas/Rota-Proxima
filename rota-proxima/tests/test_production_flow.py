@@ -76,6 +76,17 @@ class RequestedInterfaceTests(unittest.TestCase):
             self.assertNotIn(field, form)
         self.assertIn('before update on public.pevs', self.migrations)
 
+    def test_priority_is_configured_only_in_requests(self):
+        list_start = self.frontend.index('function drawPevList')
+        list_end = self.frontend.index('async function openPevTrash', list_start)
+        pev_start = self.frontend.index('async function openPevModal')
+        request_start = self.frontend.index('function openRequestModal', pev_start)
+        planner_start = self.frontend.index('async function renderPlanner', request_start)
+        self.assertNotIn('priorityLabel[p.default_priority]', self.frontend[list_start:list_end])
+        self.assertNotIn('name="default_priority"', self.frontend[pev_start:request_start])
+        self.assertIn('name="priority"', self.frontend[request_start:planner_start])
+        self.assertIn("priorityOptions('normal')", self.frontend[request_start:planner_start])
+
     def test_request_form_keeps_period_and_observations_and_resets(self):
         start = self.frontend.index('function openRequestModal')
         end = self.frontend.index('async function renderPlanner', start)
