@@ -15,9 +15,9 @@ class VisualParityTests(unittest.TestCase):
     def test_visual_assets_force_a_fresh_browser_version(self):
         html = (ROOT / 'static' / 'index.html').read_text(encoding='utf-8')
         worker = (ROOT / 'static' / 'service-worker.js').read_text(encoding='utf-8')
-        self.assertIn('styles.css?v=producao-completa-20260820-2', html)
-        self.assertIn('app.js?v=producao-completa-20260820-2', html)
-        self.assertIn("rota-proxima-producao-completa-20260820-v2", worker)
+        self.assertIn('styles.css?v=render-performance-20260820-1', html)
+        self.assertIn('app.js?v=render-performance-20260820-1', html)
+        self.assertIn("rota-proxima-render-performance-20260820-v1", worker)
 
     def test_all_current_test_ui_layers_are_loaded_in_production(self):
         html = (ROOT / 'static' / 'index.html').read_text(encoding='utf-8')
@@ -29,7 +29,7 @@ class VisualParityTests(unittest.TestCase):
         )
         for asset in assets:
             self.assertTrue((ROOT / 'static' / asset).exists(), asset)
-            self.assertIn(f'/{asset}?v=producao-completa-20260820-2', html)
+            self.assertIn(f'/{asset}?v=render-performance-20260820-1', html)
             self.assertIn(f"'/{asset}'", worker)
 
     def test_dashboard_uses_the_markup_expected_by_the_promoted_css(self):

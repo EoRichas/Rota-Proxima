@@ -14,7 +14,6 @@ const state = {
   plannerPriorities: {},
   plannerServiceTypes: {},
   plannerExactTimes: {},
-  map: null,
   routeListTimer: null,
 };
 
@@ -111,16 +110,22 @@ async function getPosition(required=false) {
 
 async function boot() {
   let sessionError='';
+  // Em acessos repetidos o shell vem do cache mesmo se o Render estiver
+  // acordando; mantenha uma tela útil visível durante a checagem da sessão.
+  showAuthScreen(false,'Conectando ao servidor...');
   try {
     const me = await api('/api/me');
     if (me.user) return enterApp(me.user);
   } catch (e) {
     sessionError=e.message || 'Não foi possível verificar sua sessão.';
   }
+  // A tela de login não precisa esperar a função remota de primeiro acesso.
+  // Em produção o usuário já pode começar a preencher enquanto essa checagem termina.
+  showAuthScreen(false,sessionError);
+  if(sessionError)toast(sessionError,'error');
   try {
     const setup = await api('/api/setup-status');
     showAuthScreen(!!setup.needs_setup,sessionError);
-    if(sessionError)toast(sessionError,'error');
   } catch (e) {
     const message=sessionError || e.message || 'Não foi possível carregar o acesso.';
     showAuthScreen(false,message);
