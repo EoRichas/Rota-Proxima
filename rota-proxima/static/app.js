@@ -277,7 +277,7 @@ function drawPevList() {
   $('#pevList').innerHTML = items.length ? `<div class="list">${items.map(p=>`
     <div class="list-item">
       <div class="list-item-main"><strong>${p.favorite?'<span class="favorite">★</span> ':''}${esc(p.name)}</strong><span>${esc(p.street)}, ${esc(p.number||'s/n')} • ${esc(p.city)}/${esc(p.state)}</span><span>${p.contact_name ? `Responsável: ${esc(p.contact_name)}${p.phone?` • ${esc(p.phone)}`:''}` : 'Responsável não informado'}</span><span>Comercial: ${p.commercial_owner_name?esc(p.commercial_owner_name):'<b>Não definido</b>'}</span></div>
-      <div class="actions">${!p.location_confirmed?'<span class="badge high">Localização não confirmada</span>':''}${state.user.role==='admin'&&!p.location_confirmed&&p.lat!=null&&p.lng!=null?`<button class="btn secondary small confirm-location" data-id="${p.id}">Confirmar localização</button>`:''}<span class="badge ${p.default_priority}">${priorityLabel[p.default_priority]}</span>${state.user.role==='commercial'?`<button class="btn secondary small request-pev" data-id="${p.id}">Solicitar</button>`:''}${['admin','commercial'].includes(state.user.role)?`<button class="btn ghost small edit-pev" data-id="${p.id}">Editar</button><button class="btn danger small delete-pev" data-id="${p.id}" data-name="${esc(p.name)}">Excluir</button>`:''}</div>
+      <div class="actions">${!p.location_confirmed?'<span class="badge high">Localização não confirmada</span>':''}${state.user.role==='admin'&&!p.location_confirmed&&p.lat!=null&&p.lng!=null?`<button class="btn secondary small confirm-location" data-id="${p.id}">Confirmar localização</button>`:''}${state.user.role==='commercial'?`<button class="btn secondary small request-pev" data-id="${p.id}">Solicitar</button>`:''}${['admin','commercial'].includes(state.user.role)?`<button class="btn ghost small edit-pev" data-id="${p.id}">Editar</button><button class="btn danger small delete-pev" data-id="${p.id}" data-name="${esc(p.name)}">Excluir</button>`:''}</div>
     </div>`).join('')}</div>` : `<div class="empty">Nenhum PEV encontrado.</div>`;
   $$('.edit-pev').forEach(b => b.onclick = () => openPevModal(state.pevs.find(p => p.id === Number(b.dataset.id))));
   $$('.request-pev').forEach(b => b.onclick = () => openRequestModal(state.pevs.find(p => p.id === Number(b.dataset.id))));
@@ -303,7 +303,7 @@ async function openPevTrash(){
 }
 
 async function openPevModal(pev=null) {
-  const p = pev || {address_mode:'cep',default_priority:'normal',whatsapp:true,favorite:false};
+  const p = pev || {address_mode:'cep',whatsapp:true,favorite:false};
   if(state.user.role==='admin'){try{state.commercials=(await api('/api/commercials')).items||[];}catch(e){state.commercials=[];}}
   const ownerField=state.user.role==='admin'?`<label class="field span-2"><span>Comercial responsável ${!pev&&state.commercials.length?'*':''}</span><select name="commercial_owner_id" ${!pev&&state.commercials.length?'required':''}><option value="">${state.commercials.length?'Selecione o Comercial':'Nenhum usuário Comercial cadastrado'}</option>${state.commercials.map(c=>`<option value="${esc(c.id)}" ${String(p.commercial_owner_id||'')===String(c.id)?'selected':''}>${esc(c.name)}</option>`).join('')}</select><small class="muted">Somente o Administrador pode alterar esta vinculação.${!state.commercials.length?' Cadastre primeiro um usuário com perfil Comercial.':''}</small></label>`:`<div class="span-2 info"><b>Comercial responsável:</b> ${esc(p.commercial_owner_name||state.user.name)}${pev?'':' • será vinculado automaticamente ao salvar'}</div>`;
   modal(`<form id="pevForm" class="modal-box">
@@ -325,7 +325,6 @@ async function openPevModal(pev=null) {
       <label class="field"><span>Telefone</span><input name="phone" value="${esc(p.phone||'')}" placeholder="(15) 99999-9999"></label>
       <label class="field"><span>Contato tem WhatsApp?</span><select name="whatsapp"><option value="1" ${p.whatsapp?'selected':''}>Sim</option><option value="0" ${!p.whatsapp?'selected':''}>Não</option></select></label>
       <div class="span-2"><hr><h3>Organização</h3></div>
-      <label class="field"><span>Prioridade padrão</span><select name="default_priority">${priorityOptions(p.default_priority)}</select></label>
       <label class="field"><span>Favorito</span><select name="favorite"><option value="1" ${p.favorite?'selected':''}>Sim</option><option value="0" ${!p.favorite?'selected':''}>Não</option></select></label>
       <div class="span-2"><hr><h3>Localização confirmada (opcional)</h3><p class="muted">Útil para área rural, condomínio grande ou cidade com CEP genérico. Se preenchida, a rota usa estas coordenadas acima do endereço.</p></div>
       <label class="field"><span>Latitude</span><input name="lat" inputmode="decimal" value="${p.lat??''}" placeholder="-23.500000"></label>
@@ -406,7 +405,7 @@ function openRequestModal(pev=null){
   const today=new Date().toISOString().slice(0,10);
   modal(`<form id="requestForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Agendamento</span><h2>Nova solicitação</h2></div><button type="button" class="icon-btn modal-close">×</button></div><div class="form-grid">
     <label class="field span-2"><span>PEV / Local *</span><select name="pev_id" required><option value="">Selecione</option>${state.pevs.map(p=>`<option value="${p.id}" ${pev&&pev.id===p.id?'selected':''}>${esc(p.name)} — ${esc(p.city)}/${esc(p.state)}</option>`).join('')}</select></label>
-    <label class="field"><span>Data solicitada *</span><input type="date" name="requested_date" value="${today}" required></label><label class="field"><span>Prioridade</span><select name="priority">${priorityOptions(pev?.default_priority||'normal')}</select></label>
+    <label class="field"><span>Data solicitada *</span><input type="date" name="requested_date" value="${today}" required></label><label class="field"><span>Prioridade</span><select name="priority">${priorityOptions('normal')}</select></label>
     <label class="field span-2"><span>Horário específico para esta coleta</span><input type="time" name="exact_time"><small class="muted">Opcional e válido somente para esta solicitação.</small></label>
     <label class="field"><span>Período inicial</span><input type="time" name="window_start"></label><label class="field"><span>Período final</span><input type="time" name="window_end"></label>
     <div class="info span-2">Se houver horário específico, ele terá prioridade sobre a janela normal para organizar a rota daquele dia.</div>
