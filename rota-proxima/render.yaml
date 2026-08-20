@@ -5,9 +5,11 @@ services:
     plan: free
     region: virginia
     buildCommand: pip install -r requirements.txt
-    startCommand: python server.py
+    startCommand: python server_sharepoint.py
     healthCheckPath: /api/health
     autoDeployTrigger: commit
     envVars:
       - key: FORCE_SECURE_COOKIES
         value: "true"
+      - key: AZURE_FUNCTION_UPLOAD_URL
+        sync: false

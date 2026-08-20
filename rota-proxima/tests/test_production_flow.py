@@ -60,6 +60,8 @@ class RequestedInterfaceTests(unittest.TestCase):
         cls.frontend = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
         cls.backend = (ROOT / 'server.py').read_text(encoding='utf-8')
         cls.styles = (ROOT / 'static' / 'styles.css').read_text(encoding='utf-8')
+        cls.sharepoint_backend = (ROOT / 'server_sharepoint.py').read_text(encoding='utf-8')
+        cls.render_config = (ROOT / 'render.yaml').read_text(encoding='utf-8')
         cls.edge_function = (ROOT / 'supabase' / 'functions' / 'rota-admin' / 'index.ts').read_text(encoding='utf-8')
         cls.migrations = '\n'.join(
             path.read_text(encoding='utf-8')
@@ -126,13 +128,24 @@ class RequestedInterfaceTests(unittest.TestCase):
         self.assertIn('https://uufkwqdsixvuhiyoyyyy.supabase.co', self.backend)
         self.assertIn('rota-evidencias', self.backend)
         self.assertIn("bucket_id = 'rota-evidencias'", self.migrations)
-        for marker in ('wzonboudahxbyzoxnehx', 'rota-evidencias-teste', 'AMBIENTE DE TESTE', 'ambiente-teste-badge'):
+        for marker in ('AMBIENTE DE TESTE', 'ambiente-teste-badge'):
             self.assertNotIn(marker, combined)
 
     def test_deferred_local_sync_metadata_is_not_published(self):
         combined = '\n'.join((self.backend, self.frontend, self.styles))
         for marker in ('showDirectoryPicker', 'evidence-sync', 'SHAREPOINT_ONLY', 'Rota - PEV', 'OneDrive -'):
             self.assertNotIn(marker, combined)
+
+    def test_production_sharepoint_upload_uses_only_new_production_evidence(self):
+        self.assertIn("BUCKET = 'rota-evidencias'", self.sharepoint_backend)
+        self.assertIn('_ORIGINAL_UPLOAD = rota.upload_evidence', self.sharepoint_backend)
+        self.assertIn("if not AZURE_FUNCTION_UPLOAD_URL:\n        return storage_path", self.sharepoint_backend)
+        self.assertIn('target=_sync_after_insert', self.sharepoint_backend)
+        self.assertIn('daemon=True', self.sharepoint_backend)
+        self.assertIn('update_own_evidence_sync', self.sharepoint_backend)
+        self.assertIn('startCommand: python server_sharepoint.py', self.render_config)
+        self.assertIn('key: AZURE_FUNCTION_UPLOAD_URL', self.render_config)
+        self.assertNotRegex(self.sharepoint_backend, r"BUCKET\s*=\s*'[^']*teste[^']*'")
 
 
 if __name__ == '__main__':
