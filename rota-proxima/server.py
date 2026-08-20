@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import io, json, math, mimetypes, os, urllib.parse, urllib.request, time, threading
+import io, json, math, mimetypes, os, urllib.parse, urllib.request, time, threading, base64, uuid
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,9 +25,12 @@ REST=f'{SUPABASE_URL}/rest/v1'
 AUTH=f'{SUPABASE_URL}/auth/v1'
 ADMIN_FN=f'{SUPABASE_URL}/functions/v1/rota-admin'
 USER_AGENT='RotaProxima/3.0'
+SUPABASE_HTTP_TIMEOUT=(5,30)
+SUPABASE_UNAVAILABLE_MESSAGE='O serviço de dados está temporariamente indisponível. Tente novamente em alguns instantes.'
+AUTH_REFRESH_UNAVAILABLE_MESSAGE='Não foi possível renovar sua sessão agora. Tente novamente em alguns instantes.'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
 SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
-BUILD_ID='SP-RENDER-CARTEIRA-COMERCIAL-2026-08-13'
+BUILD_ID='PRODUCAO-PESAGENS-2026-08-20'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -230,8 +233,11 @@ def collection_report_items(token,date_from,date_to):
         'select':'id,route_id,pev_id,request_id,sequence,status,service_type,exact_time,arrived_at,completed_at,failure_reason,driver_note,collected_weight_kg,pevs(name,street,number,district,city,state,cep,contact_name,phone,commercial_owner_id,profiles!pevs_commercial_owner_id_fkey(id,name)),scheduling_requests(requested_by,profiles!scheduling_requests_requested_by_fkey(name))',
         'order':'route_id.desc,sequence.asc'
     })
+    weighing_rows=Supa.get('route_weighings',token,{'route_id':f'in.({ids})','select':'stop_id,weight_kg'}) or []
+    weight_by_stop={int(w['stop_id']):w.get('weight_kg') for w in weighing_rows if w.get('stop_id') is not None}
     items=[]
     for st in stops:
+        st['collected_weight_kg']=weight_by_stop.get(int(st['id']),st.get('collected_weight_kg'))
         r=route_map.get(int(st['route_id'])) or {};drv=r.get('profiles') or {};pev=st.pop('pevs',{}) or {};req=st.pop('scheduling_requests',{}) or {};requester=req.get('profiles') or {};owner=pev.pop('profiles',{}) or {}
         items.append({
             **st,'route_name':r.get('name',''),'route_date':r.get('route_date'),'route_status':r.get('status'),
@@ -284,7 +290,7 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
     doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=28,leftMargin=28,topMargin=24,bottomMargin=34,title='Relatório Operacional de Coletas e Entregas - Cassola Ambiental')
 
     total=len(items);collections=sum(1 for x in items if x.get('service_type','collection')=='collection');deliveries=total-collections
-    completed=sum(1 for x in items if x.get('status')=='completed');failed=sum(1 for x in items if x.get('status')=='failed');rate=round((completed/total*100),1) if total else 0
+    completed=sum(1 for x in items if x.get('status')=='completed');failed=sum(1 for x in items if x.get('status')=='failed');total_weight=sum(float(x.get('collected_weight_kg') or 0) for x in items);rate=round((completed/total*100),1) if total else 0
     logo_path=os.path.join(STATIC_DIR,'cassola-logo.jpeg')
     logo=Image(logo_path,width=80,height=80) if os.path.exists(logo_path) else Paragraph('CASSOLA AMBIENTAL',small_b)
     issue=datetime.now().strftime('%d/%m/%Y %H:%M')
@@ -301,9 +307,9 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
     if filters.get('route') not in (None,'','all') and items: route_name=items[0].get('route_name') or 'Rota selecionada'
     if filters.get('commercial') not in (None,'','all') and items and not filters.get('commercial_name'): commercial_name=items[0].get('commercial_owner_name') or 'Comercial selecionado'
     filter_data=[[Paragraph('<b>FILTROS</b>',small_b),Paragraph(f'<b>Período</b><br/>{date_from} a {date_to}',small),Paragraph(f'<b>Comercial</b><br/>{_pdf_text(commercial_name)}',small),Paragraph(f'<b>PEV</b><br/>{_pdf_text(pev_name)}',small),Paragraph(f'<b>Rota</b><br/>{_pdf_text(route_name)}',small),Paragraph(f'<b>Tipo</b><br/>{type_map.get(filters.get("service_type","all"),"Todos")}',small),Paragraph(f'<b>Status</b><br/>{status_map.get(filters.get("status","all"),"Todos")}',small)]]
-    filter_table=Table(filter_data,colWidths=[45,82,78,110,76,58,68]);filter_table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),pale),('BOX',(0,0),(-1,-1),.6,line),('INNERGRID',(1,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+    filter_table=Table(filter_data,colWidths=[45,75,75,105,72,60,65]);filter_table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),pale),('BOX',(0,0),(-1,-1),.6,line),('INNERGRID',(1,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
 
-    kpis=[('Total de visitas',total),('Coletas',collections),('Entregas',deliveries),('Realizadas',completed),('Não realizadas',failed),('Taxa de realização',f'{rate:.1f}%'.replace('.',','))]
+    kpis=[('Visitas',total),('Coletas',collections),('Entregas',deliveries),('Realizadas',completed),('Não realizadas',failed),('Peso coletado',f'{total_weight:,.2f} kg'.replace(',','X').replace('.',',').replace('X','.'))]
     krow=[]
     for label,value in kpis:krow.append(Table([[Paragraph(label,kpi_label)],[Paragraph(str(value),kpi_num)]],colWidths=[87],rowHeights=[22,27]))
     kpi_table=Table([krow],colWidths=[91]*6);kpi_table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),2),('RIGHTPADDING',(0,0),(-1,-1),2)]))
@@ -311,42 +317,43 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
     story=[head,Spacer(1,12),filter_table,Spacer(1,12),kpi_table,Spacer(1,12)]
     if filters.get('show_comparison') and filters.get('commercial','all')=='all':
         grouped={}
-        for oid,p in (filters.get('portfolio') or {}).items(): grouped[str(oid)]={'name':p.get('name') or 'Comercial','pevs_total':int(p.get('pevs') or 0),'pevs':set(),'visits':0,'collections':0,'deliveries':0,'completed':0,'failed':0}
+        for oid,p in (filters.get('portfolio') or {}).items(): grouped[str(oid)]={'name':p.get('name') or 'Comercial','pevs_total':int(p.get('pevs') or 0),'pevs':set(),'visits':0,'collections':0,'deliveries':0,'completed':0,'failed':0,'weight':0}
         for x in items:
             oid=str(x.get('commercial_owner_id') or '')
             if not oid: continue
-            g=grouped.setdefault(oid,{'name':x.get('commercial_owner_name') or 'Comercial','pevs_total':0,'pevs':set(),'visits':0,'collections':0,'deliveries':0,'completed':0,'failed':0})
+            g=grouped.setdefault(oid,{'name':x.get('commercial_owner_name') or 'Comercial','pevs_total':0,'pevs':set(),'visits':0,'collections':0,'deliveries':0,'completed':0,'failed':0,'weight':0})
             g['pevs'].add(x.get('pev_id'));g['visits']+=1
             if x.get('service_type','collection')=='collection':g['collections']+=1
             else:g['deliveries']+=1
             if x.get('status')=='completed':g['completed']+=1
             elif x.get('status')=='failed':g['failed']+=1
+            g['weight']+=float(x.get('collected_weight_kg') or 0)
         if grouped:
             comp_head=ParagraphStyle('CompHead',parent=small_b,textColor=colors.white,alignment=TA_CENTER)
-            comp_rows=[[Paragraph('Comercial',comp_head),Paragraph('PEVs',comp_head),Paragraph('Visitas',comp_head),Paragraph('Coletas',comp_head),Paragraph('Entregas',comp_head),Paragraph('Realizadas',comp_head),Paragraph('Taxa',comp_head)]]
+            comp_rows=[[Paragraph('Comercial',comp_head),Paragraph('PEVs',comp_head),Paragraph('Visitas',comp_head),Paragraph('Coletas',comp_head),Paragraph('Entregas',comp_head),Paragraph('Realizadas',comp_head),Paragraph('Taxa',comp_head),Paragraph('Peso',comp_head)]]
             for g in sorted(grouped.values(),key=lambda z:z['name'].lower()):
                 r=round(g['completed']/g['visits']*100,1) if g['visits'] else 0
-                comp_rows.append([Paragraph(_pdf_text(g['name']),small),str(g.get('pevs_total') or len(g['pevs'])),str(g['visits']),str(g['collections']),str(g['deliveries']),str(g['completed']),f'{r:.1f}%'.replace('.',',')])
-            comp=Table(comp_rows,repeatRows=1,colWidths=[150,55,60,60,60,65,65])
+                comp_rows.append([Paragraph(_pdf_text(g['name']),small),str(g.get('pevs_total') or len(g['pevs'])),str(g['visits']),str(g['collections']),str(g['deliveries']),str(g['completed']),f'{r:.1f}%'.replace('.',','),f"{g['weight']:,.2f} kg".replace(',','X').replace('.',',').replace('X','.')])
+            comp=Table(comp_rows,repeatRows=1,colWidths=[125,48,55,55,55,58,55,78])
             comp.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),green),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,1),(-1,-1),'CENTER'),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]))
             story += [Paragraph('Comparativo por Comercial',ParagraphStyle('Section',parent=small_b,fontSize=10,leading=13)),Spacer(1,5),comp,Spacer(1,12)]
     if filters.get('pev') not in (None,'','all'):
         last=max((x for x in items if x.get('route_date')),key=lambda x:(str(x.get('route_date')),str(x.get('completed_at') or x.get('arrived_at') or '')),default=None)
-        selected=Table([[Paragraph('<b>PEV SELECIONADO</b><br/><font size="12"><b>'+_pdf_text(pev_name)+'</b></font>',small),Paragraph(f'<b>Total de visitas</b><br/><font size="15"><b>{total}</b></font>',small),Paragraph(f'<b>Total de coletas</b><br/><font size="15"><b>{collections}</b></font>',small),Paragraph(f'<b>Total de entregas</b><br/><font size="15"><b>{deliveries}</b></font>',small),Paragraph(f'<b>Última visita</b><br/>{_pdf_text((last or {}).get("route_date") or "-")}',small)]],colWidths=[210,85,85,85,92])
+        selected=Table([[Paragraph('<b>PEV SELECIONADO</b><br/><font size="12"><b>'+_pdf_text(pev_name)+'</b></font>',small),Paragraph(f'<b>Visitas</b><br/><font size="14"><b>{total}</b></font>',small),Paragraph(f'<b>Coletas</b><br/><font size="14"><b>{collections}</b></font>',small),Paragraph(f'<b>Entregas</b><br/><font size="14"><b>{deliveries}</b></font>',small),Paragraph(f'<b>Peso</b><br/><font size="12"><b>{total_weight:,.2f} kg</b></font>'.replace(',','X').replace('.',',').replace('X','.'),small),Paragraph(f'<b>Última visita</b><br/>{_pdf_text((last or {}).get("route_date") or "-")}',small)]],colWidths=[185,66,66,66,92,82])
         selected.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#F1F7F2')),('BOX',(0,0),(-1,-1),.7,colors.HexColor('#BFD3C5')),('INNERGRID',(1,0),(-1,-1),.35,colors.HexColor('#CAD8CE')),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
         story += [selected,Spacer(1,12)]
 
-    header=['Data','Tipo','PEV / Local','Rota','Status','Observação']
+    header=['Data','Tipo','PEV / Local','Rota','Peso','Status','Observação']
     rows=[[Paragraph(h,ParagraphStyle('TH',parent=small_b,textColor=colors.white,alignment=TA_CENTER)) for h in header]]
     status_label={'completed':'Realizada','failed':'Não realizada','arrived':'No local','skipped':'Pulada','pending':'Pendente'}
     for x in items:
         note=x.get('failure_reason') or x.get('driver_note') or ''
-        rows.append([Paragraph(_pdf_text(x.get('route_date')),small),Paragraph(_pdf_text(SERVICE_TYPE_LABEL.get(x.get('service_type','collection'),'Coleta')),small),Paragraph(_pdf_text(x.get('pev_name')),small),Paragraph(_pdf_text(x.get('route_name')),small),Paragraph(_pdf_text(status_label.get(x.get('status'),x.get('status'))),small),Paragraph(_pdf_text(note),small)])
-    table=LongTable(rows,repeatRows=1,colWidths=[62,60,150,92,82,111])
+        rows.append([Paragraph(_pdf_text(x.get('route_date')),small),Paragraph(_pdf_text(SERVICE_TYPE_LABEL.get(x.get('service_type','collection'),'Coleta')),small),Paragraph(_pdf_text(x.get('pev_name')),small),Paragraph(_pdf_text(x.get('route_name')),small),Paragraph(_pdf_text((f"{float(x.get('collected_weight_kg')):.2f} kg" if x.get('collected_weight_kg') else '-')),small),Paragraph(_pdf_text(status_label.get(x.get('status'),x.get('status'))),small),Paragraph(_pdf_text(note),small)])
+    table=LongTable(rows,repeatRows=1,colWidths=[55,52,135,80,65,75,95])
     style=[('BACKGROUND',(0,0),(-1,0),green),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),0.3,line),('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]
     for i,x in enumerate(items,start=1):
-        if x.get('status')=='failed': style.append(('TEXTCOLOR',(4,i),(4,i),red))
-        elif x.get('status')=='completed': style.append(('TEXTCOLOR',(4,i),(4,i),green2))
+        if x.get('status')=='failed': style.append(('TEXTCOLOR',(5,i),(5,i),red))
+        elif x.get('status')=='completed': style.append(('TEXTCOLOR',(5,i),(5,i),green2))
         if i%2==0: style.append(('BACKGROUND',(0,i),(-1,i),colors.HexColor('#FAFCFA')))
     table.setStyle(TableStyle(style));story.append(table)
 
@@ -358,9 +365,10 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
     doc.build(story,onFirstPage=footer,onLaterPages=footer);return buf.getvalue()
 
 class SupaHTTPError(RuntimeError):
-    def __init__(self,status,message):
+    def __init__(self,status,message,public_message=None):
         super().__init__(message)
         self.status=int(status)
+        self.public_message=public_message or str(message)
 
 class Supa:
     @staticmethod
@@ -371,11 +379,18 @@ class Supa:
         return h
     @staticmethod
     def req(method,table,token,params=None,body=None,prefer=None):
-        r=HTTP.request(method,f'{REST}/{table}',headers=Supa.headers(token,prefer),params=params,json=body,timeout=20)
+        try:
+            r=HTTP.request(method,f'{REST}/{table}',headers=Supa.headers(token,prefer),params=params,json=body,timeout=SUPABASE_HTTP_TIMEOUT)
+        except requests.RequestException as e:
+            # Não expõe host/stack ao navegador e não repete operações de escrita.
+            print(f'[SUPABASE NETWORK ERROR] {method} /rest/v1/{table}: {type(e).__name__}: {e}')
+            raise SupaHTTPError(503,str(e),SUPABASE_UNAVAILABLE_MESSAGE) from e
         if not r.ok:
             try:m=r.json().get('message') or r.json().get('error') or r.text
             except:m=r.text
-            raise SupaHTTPError(r.status_code,m or f'Erro Supabase {r.status_code}')
+            message=m or f'Erro Supabase {r.status_code}'
+            public=SUPABASE_UNAVAILABLE_MESSAGE if r.status_code>=500 else message
+            raise SupaHTTPError(r.status_code,message,public)
         if not r.text:return None
         return r.json()
     @staticmethod
@@ -389,6 +404,85 @@ class Supa:
     @staticmethod
     def rpc(name,token,body=None):return Supa.req('POST',f'rpc/{name}',token,body=body or {})
 
+
+def upload_evidence(token, data_url, path_prefix):
+    if not data_url or ',' not in str(data_url):
+        raise ValueError('Envie uma foto válida')
+    header, payload = str(data_url).split(',',1)
+    image_formats={
+        'data:image/jpeg;base64':('image/jpeg','jpg'),
+        'data:image/png;base64':('image/png','png'),
+        'data:image/webp;base64':('image/webp','webp'),
+    }
+    image_format=image_formats.get(header.lower())
+    if not image_format:
+        raise ValueError('Formato de foto inválido')
+    try:raw=base64.b64decode(payload,validate=True)
+    except Exception as exc:raise ValueError('Conteúdo da foto inválido') from exc
+    if not raw or len(raw)>8*1024*1024:
+        raise ValueError('A foto deve ter no máximo 8 MB')
+    mime,ext=image_format
+    valid_signature=(
+        (mime=='image/jpeg' and raw.startswith(b'\xff\xd8\xff'))
+        or (mime=='image/png' and raw.startswith(b'\x89PNG\r\n\x1a\n'))
+        or (mime=='image/webp' and len(raw)>=12 and raw[:4]==b'RIFF' and raw[8:12]==b'WEBP')
+    )
+    if not valid_signature:raise ValueError('Conteúdo da foto inválido')
+    path=f"{path_prefix}/{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}.{ext}"
+    r=HTTP.post(f'{SUPABASE_URL}/storage/v1/object/rota-evidencias/{path}',headers={'apikey':SUPABASE_KEY,'Authorization':f'Bearer {token}','Content-Type':mime,'x-upsert':'false'},data=raw,timeout=30)
+    if not r.ok:
+        try:msg=r.json().get('message') or r.json().get('error') or r.text
+        except:msg=r.text
+        raise RuntimeError(msg or 'Falha ao salvar foto')
+    return path
+
+def route_weighings(token,route_id):
+    return Supa.get('route_weighings',token,{'route_id':f'eq.{route_id}','select':'id,route_id,stop_id,pev_id,weight_kg,evidence_id,created_at','order':'created_at.asc'}) or []
+
+def route_evidences(token,route_id):
+    return Supa.get('route_evidences',token,{'route_id':f'eq.{route_id}','select':'id,route_id,stop_id,pev_id,evidence_type,storage_path,created_at','order':'created_at.asc'}) or []
+
+def pending_production_weighings(route):
+    """Retorna somente coletas concluídas que ainda não receberam pesagem."""
+    weighed={int(w.get('stop_id')) for w in route.get('weighings',[]) if w.get('stop_id') is not None}
+    return [
+        stop for stop in route.get('stops',[])
+        if stop.get('status')=='completed'
+        and stop.get('service_type','collection')=='collection'
+        and int(stop.get('id')) not in weighed
+    ]
+
+def route_waiting_for_production(route):
+    if not route or route.get('status')!='in_progress':return False
+    if any(stop.get('status') in ('pending','arrived') for stop in route.get('stops',[])):return False
+    return bool(pending_production_weighings(route))
+
+def production_weighing_items(token):
+    rows=Supa.get('route_stops',token,{
+        'status':'eq.completed','service_type':'eq.collection',
+        'select':'id,route_id,pev_id,sequence,completed_at,pevs(name,street,number,district,city,state),routes!inner(id,name,route_date,status)',
+        'order':'route_id.asc,sequence.asc'
+    }) or []
+    items=[]
+    for row in rows:
+        route=row.pop('routes',{}) or {};pev=row.pop('pevs',{}) or {}
+        items.append({
+            'stop_id':row.get('id'),'route_id':row.get('route_id'),'pev_id':row.get('pev_id'),'sequence':row.get('sequence'),'completed_at':row.get('completed_at'),
+            'route_name':route.get('name') or f'Rota {row.get("route_id")}','route_date':route.get('route_date'),
+            'pev_name':pev.get('name') or f'PEV {row.get("pev_id")}','street':pev.get('street') or '','number':pev.get('number') or '',
+            'district':pev.get('district') or '','city':pev.get('city') or '','state':pev.get('state') or ''
+        })
+    return items
+
+def try_auto_finish_route(token,user,route_id,lat=None,lng=None):
+    route=get_route_full(token,route_id)
+    if not route or route.get('status')!='in_progress':return route
+    if any(s.get('status') in ('pending','arrived') for s in route.get('stops',[])):return route
+    if pending_production_weighings(route):return route
+    Supa.update('routes',token,{'id':f'eq.{route_id}','status':'eq.in_progress'},{'status':'finished','finished_at':now_iso(),'finished_lat':lat,'finished_lng':lng})
+    audit(token,user,'finish','route',route_id,'Rota finalizada automaticamente após conclusão das paradas e pesagens',None,None,{'automatic':True})
+    route=get_route_full(token,route_id);route['auto_finished']=True
+    return route
 
 def edge(action,body=None,token=None):
     h={'apikey':SUPABASE_KEY,'Content-Type':'application/json'}
@@ -442,15 +536,15 @@ def schedule_conflicts(stops):
 def get_route_full(token,route_id):
     r=first(Supa.get('routes',token,{'id':f'eq.{route_id}','select':'*,profiles!routes_driver_id_fkey(name)'}))
     if not r:return None
-    stops=Supa.get('route_stops',token,{'route_id':f'eq.{route_id}','select':'*,pevs(*),scheduling_requests(exact_time)','order':'sequence.asc'})
+    stops=Supa.get('route_stops',token,{'route_id':f'eq.{route_id}','select':'*,pevs(*),scheduling_requests(exact_time,window_start,window_end,notes)','order':'sequence.asc'})
     out={**r,'driver_name':(r.get('profiles') or {}).get('name','')};out.pop('profiles',None)
     o=out.get('origin_json') or {};out['origin']=o
     mapped=[]
     for s in stops:
         p=s.pop('pevs',{}) or {};rq=s.pop('scheduling_requests',{}) or {}
-        x={**s,'pev_name':p.get('name'),'street':p.get('street'),'number':p.get('number'),'complement':p.get('complement'),'district':p.get('district'),'city':p.get('city'),'state':p.get('state'),'cep':p.get('cep'),'lat':p.get('lat'),'lng':p.get('lng'),'location_confirmed':p.get('location_confirmed'),'contact_name':p.get('contact_name'),'contact_role':p.get('contact_role'),'phone':p.get('phone'),'whatsapp':p.get('whatsapp'),'notes':p.get('notes'),'exact_time':s.get('exact_time') or rq.get('exact_time') or ''}
+        x={**s,'pev_name':p.get('name'),'street':p.get('street'),'number':p.get('number'),'complement':p.get('complement'),'district':p.get('district'),'city':p.get('city'),'state':p.get('state'),'cep':p.get('cep'),'lat':p.get('lat'),'lng':p.get('lng'),'location_confirmed':p.get('location_confirmed'),'contact_name':p.get('contact_name'),'contact_role':p.get('contact_role'),'phone':p.get('phone'),'whatsapp':p.get('whatsapp'),'notes':rq.get('notes') or '','window_start':s.get('window_start') or rq.get('window_start') or '','window_end':s.get('window_end') or rq.get('window_end') or '','exact_time':s.get('exact_time') or rq.get('exact_time') or ''}
         mapped.append(x)
-    out['stops']=mapped;out['schedule_warnings']=schedule_conflicts(mapped);out['timeline']=route_timeline(token,out);return out
+    out['stops']=mapped;out['weighings']=route_weighings(token,route_id);out['evidences']=route_evidences(token,route_id);loc=Supa.get('driver_location_updates',token,{'route_id':f'eq.{route_id}','select':'lat,lng,accuracy_m,recorded_at','order':'recorded_at.desc','limit':'1'}) or [];out['last_location']=loc[0] if loc else None;out['schedule_warnings']=schedule_conflicts(mapped);out['timeline']=route_timeline(token,out);return out
 
 
 def route_timeline(token,route):
@@ -468,7 +562,7 @@ def route_timeline(token,route):
         logs=Supa.get('audit_logs',token,{'entity_type':'eq.route','entity_id':f'eq.{route.get("id")}','action':'eq.recalculate','select':'created_at,summary,metadata','order':'created_at.asc'})
         for a in logs or []:events.append({'type':'recalculate','at':a.get('created_at'),'label':'Motorista recalculou o restante da rota','metadata':a.get('metadata') or {}})
     except Exception:pass
-    if route.get('finished_at'): events.append({'type':'route_finished','at':route.get('finished_at'),'label':f'{driver} finalizou a rota','lat':route.get('finished_lat'),'lng':route.get('finished_lng')})
+    if route.get('finished_at'): events.append({'type':'route_finished','at':route.get('finished_at'),'label':'Rota finalizada após conclusão das paradas e pesagens','lat':route.get('finished_lat'),'lng':route.get('finished_lng')})
     events.sort(key=lambda e:str(e.get('at') or ''))
     return events
 
@@ -514,16 +608,32 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header('Permissions-Policy','geolocation=(self)')
         if self.is_secure_request():
             self.send_header('Strict-Transport-Security','max-age=15552000; includeSubDomains')
+    def _client_disconnected(self,exc):
+        self.close_connection=True
+        method=getattr(self,'command','?')
+        path=urllib.parse.urlparse(getattr(self,'path','?')).path or '?'
+        print(f'[CLIENT DISCONNECTED] {method} {path}: {type(exc).__name__}')
+    def _send_payload(self,raw,content_type,status=200,cache_control='no-store',extra_headers=None):
+        try:
+            self.send_response(status)
+            self.send_header('Content-Type',content_type)
+            self.send_header('Content-Length',str(len(raw)))
+            self.send_header('Cache-Control',cache_control)
+            self.common_security_headers()
+            for k,v in (getattr(self,'pending_headers',[]) or []):self.send_header(k,v)
+            for k,v in (extra_headers or {}).items():self.send_header(k,v)
+            self.end_headers()
+            self.wfile.write(raw)
+            return True
+        except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError) as exc:
+            self._client_disconnected(exc)
+            return False
     def send_json(self,obj,status=200,extra_headers=None):
-        raw=json.dumps(obj,ensure_ascii=False,default=str).encode();self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.common_security_headers()
-        for k,v in (getattr(self,'pending_headers',[]) or []):self.send_header(k,v)
-        for k,v in (extra_headers or {}).items():self.send_header(k,v)
-        self.end_headers();self.wfile.write(raw)
+        raw=json.dumps(obj,ensure_ascii=False,default=str).encode()
+        return self._send_payload(raw,'application/json; charset=utf-8',status,extra_headers=extra_headers)
     def send_bytes(self,raw,content_type='application/octet-stream',status=200,filename=None):
-        self.send_response(status);self.send_header('Content-Type',content_type);self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.common_security_headers()
-        if filename:self.send_header('Content-Disposition',f'attachment; filename="{filename}"')
-        for k,v in (getattr(self,'pending_headers',[]) or []):self.send_header(k,v)
-        self.end_headers();self.wfile.write(raw)
+        headers={'Content-Disposition':f'attachment; filename="{filename}"'} if filename else None
+        return self._send_payload(raw,content_type,status,extra_headers=headers)
     def auth_tokens(self):
         c=self.cookies();return c.get('rota_access'),c.get('rota_refresh')
     def clear_auth_headers(self):
@@ -545,11 +655,26 @@ class AppHandler(BaseHTTPRequestHandler):
                 _,access,new_refresh=cached
                 self.set_auth_headers(access,new_refresh)
                 return access
-            r=HTTP.post(f'{AUTH}/token?grant_type=refresh_token',headers={'apikey':SUPABASE_KEY,'Content-Type':'application/json'},json={'refresh_token':refresh},timeout=15)
+            try:
+                # O refresh token pode já ter sido consumido mesmo sem a resposta chegar.
+                # Por isso não há retry automático desta requisição.
+                r=HTTP.post(f'{AUTH}/token?grant_type=refresh_token',headers={'apikey':SUPABASE_KEY,'Content-Type':'application/json'},json={'refresh_token':refresh},timeout=SUPABASE_HTTP_TIMEOUT)
+            except requests.RequestException as e:
+                print(f'[AUTH REFRESH NETWORK ERROR] {type(e).__name__}: {e}')
+                raise SupaHTTPError(503,str(e),AUTH_REFRESH_UNAVAILABLE_MESSAGE) from e
             if not r.ok:
-                try: print('[AUTH REFRESH ERROR]', r.status_code, r.json())
-                except: print('[AUTH REFRESH ERROR]', r.status_code, r.text[:300])
-                return None
+                try:
+                    payload=r.json()
+                    message=payload.get('message') or payload.get('error_description') or payload.get('error') or r.text
+                except:
+                    payload=r.text[:300]
+                    message=r.text
+                print('[AUTH REFRESH ERROR]',r.status_code,payload)
+                # 400/401/403 representam sessão inválida. Falhas temporárias não devem
+                # virar falso logout nem apagar os cookies de autenticação existentes.
+                if r.status_code in (400,401,403):return None
+                public=AUTH_REFRESH_UNAVAILABLE_MESSAGE if r.status_code>=500 or r.status_code==429 else (message or AUTH_REFRESH_UNAVAILABLE_MESSAGE)
+                raise SupaHTTPError(r.status_code,message or f'Erro Supabase Auth {r.status_code}',public)
             d=r.json();access=d['access_token'];new_refresh=d['refresh_token']
             _REFRESH_RESULT_CACHE[refresh]=(now+_REFRESH_RESULT_TTL,access,new_refresh)
             if len(_REFRESH_RESULT_CACHE)>200:
@@ -667,8 +792,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 for x in rows:
                     p=x.pop('pevs',{}) or {};pr=x.pop('profiles',{}) or {};r=x.pop('routes',{}) or {};items.append({**x,**{k:p.get(k) for k in ['street','number','district','city','state','cep','contact_name','contact_role','phone']},'pev_name':p.get('name'),'requested_by_name':pr.get('name'),'route_name':r.get('name')})
                 return self.send_json({'items':items})
+            if path=='/api/production-weighings':
+                if role!='production':return self.send_json({'error':'Sem permissão'},403)
+                return self.send_json({'items':production_weighing_items(t)})
             if path=='/api/routes':
-                if role=='commercial':return self.send_json({'error':'Sem permissão'},403)
+                if role in ('commercial','production'):return self.send_json({'error':'Sem permissão'},403)
                 params={'select':'*,profiles!routes_driver_id_fkey(name),route_stops(id,status)','order':'route_date.desc,id.desc'}
                 if role=='driver':params['driver_id']=f'eq.{u["id"]}'
                 if q.get('date'):params['route_date']=f'eq.{q["date"][0]}'
@@ -677,7 +805,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     pr=x.pop('profiles',{}) or {};st=x.pop('route_stops',[]) or [];x.pop('origin_json',None);items.append({**x,'driver_name':pr.get('name',''),'completed_stops':sum(1 for z in st if z['status'] in ('completed','failed','skipped')),'total_stops':len(st)})
                 return self.send_json({'items':items})
             if path.startswith('/api/routes/') and len(path.strip('/').split('/'))==3:
-                if role=='commercial':return self.send_json({'error':'Sem permissão'},403)
+                if role in ('commercial','production'):return self.send_json({'error':'Sem permissão'},403)
                 rid=int(path.rsplit('/',1)[-1]);r=get_route_full(t,rid)
                 if not r:return self.send_json({'error':'Rota não encontrada'},404)
                 if role=='driver' and r['driver_id']!=u['id']:return self.send_json({'error':'Sem permissão'},403)
@@ -714,10 +842,22 @@ class AppHandler(BaseHTTPRequestHandler):
                     dump[table]=Supa.get(table,t,{'select':'*','order':'id.asc'} if table not in ('settings','profiles') else {'select':'*'})
                 return self.send_json({'exported_at':now_iso(),'data':dump})
             return self.send_json({'error':'Endpoint não encontrado'},404)
-        except Exception as e:return self.send_json({'error':str(e)},400)
+        except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError) as e:
+            self._client_disconnected(e)
+            return
+        except SupaHTTPError as e:
+            print(f'[API ERROR] GET {path}: SupaHTTPError {e.status}: {e}')
+            status=e.status if 400<=e.status<=599 else 502
+            return self.send_json({'error':e.public_message},status)
+        except Exception as e:
+            print(f'[API ERROR] GET {path}: {type(e).__name__}: {e}')
+            return self.send_json({'error':str(e)},400)
 
     def api_write(self,method,path):
         try:data=self.read_json()
+        except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError) as e:
+            self._client_disconnected(e)
+            return
         except Exception as e:return self.send_json({'error':f'JSON inválido: {e}'},400)
         try:
             if path=='/api/setup' and method=='POST':return self.send_json(edge('setup',data),201)
@@ -764,10 +904,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     row=first(Supa.get('pevs',t,{'id':f'eq.{pid}','select':'id,lat,lng'}));
                     if not row or row.get('lat') is None or row.get('lng') is None:return self.send_json({'error':'PEV sem coordenadas para confirmar'},409)
                     Supa.update('pevs',t,{'id':f'eq.{pid}'},{'location_confirmed':True});audit(t,u,'confirm_location','pev',pid,'Localização da PEV confirmada manualmente');return self.send_json({'ok':True})
-                # Defesa dupla: horários vazios viram None antes de chegar ao PostgreSQL.
                 pev_data=dict(data)
-                pev_data['service_start']=pev_data.get('service_start') or None
-                pev_data['service_end']=pev_data.get('service_end') or None
+                for temporary_field in ('service_start','service_end','notes','internal_notes'):pev_data.pop(temporary_field,None)
                 print(f'[PEV SAVE] build={BUILD_ID} via rpc/save_pev')
                 row=Supa.rpc('save_pev',t,{'p_id':None,'p_data':pev_data})
                 new_id=row.get('id') if isinstance(row,dict) else None;geo=None
@@ -795,8 +933,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     Supa.update('pevs',t,{'id':f'eq.{pid}'},{'active':True,'deleted_at':None,'deleted_by':None});audit(t,u,'restore','pev',pid,'PEV restaurado');return self.send_json({'ok':True})
                 if method=='PUT':
                     pev_data=dict(data)
-                    pev_data['service_start']=pev_data.get('service_start') or None
-                    pev_data['service_end']=pev_data.get('service_end') or None
+                    for temporary_field in ('service_start','service_end','notes','internal_notes'):pev_data.pop(temporary_field,None)
                     print(f'[PEV SAVE] build={BUILD_ID} via rpc/save_pev update id={pid}')
                     Supa.rpc('save_pev',t,{'p_id':pid,'p_data':pev_data});geo=None
                     try:
@@ -838,8 +975,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 dist,dur,source=osrm_matrix(points);meta={int(x['pev_id']):x for x in data.get('stops') or []};legacy_pri=data.get('priorities') or {};pri={i+1:meta.get(p['id'],{}).get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal') for i,p in enumerate(items)};exact={i+1:meta.get(p['id'],{}).get('exact_time') for i,p in enumerate(items) if meta.get(p['id'],{}).get('exact_time')}
                 order,warnings=optimize_order_with_exact_times(dist,dur,pri,exact,hhmm_to_minutes(data.get('start_time')),data.get('mode','best'));prev=0;totald=totalt=0;st=[]
                 for seq,idx in enumerate(order,1):
-                    p=items[idx-1];m=meta.get(p['id'],{});d=dist[prev][idx] or 0;du=dur[prev][idx] or 0;totald+=d;totalt+=du;prev=idx;st.append({**p,'pev':p,'pev_id':p['id'],'sequence':seq,'priority':m.get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal'),'service_type':m.get('service_type') or 'collection','window_start':m.get('window_start') or hms(p.get('service_start')),'window_end':m.get('window_end') or hms(p.get('service_end')),'exact_time':m.get('exact_time') or '','request_id':m.get('request_id'),'distance_m':d,'duration_s':du})
-                if data.get('return_origin') and order:totald+=dist[prev][0] or 0;totalt+=dur[prev][0] or 0
+                    p=items[idx-1];m=meta.get(p['id'],{});d=dist[prev][idx] or 0;du=dur[prev][idx] or 0;totald+=d;totalt+=du;prev=idx;st.append({**p,'pev':p,'pev_id':p['id'],'sequence':seq,'priority':m.get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal'),'service_type':m.get('service_type') or 'collection','window_start':m.get('window_start') or '','window_end':m.get('window_end') or '','exact_time':m.get('exact_time') or '','request_id':m.get('request_id'),'distance_m':d,'duration_s':du})
                 return self.send_json({'origin':origin,'stops':st,'total_distance_m':totald,'total_duration_s':totalt,'source':source,'schedule_warnings':warnings})
             if path=='/api/routes' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
@@ -856,7 +992,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     })
                 payload={
                     'name':data.get('name') or f'Rota {date}','route_date':date,'driver_id':driver,
-                    'return_origin':bool(data.get('return_origin')),'origin':o,
+                    'return_origin':False,'origin':o,
                     'total_distance_m':data.get('total_distance_m') or 0,'total_duration_s':data.get('total_duration_s') or 0,
                     'stops':stops
                 }
@@ -885,9 +1021,17 @@ class AppHandler(BaseHTTPRequestHandler):
                     warnings=reorder_route_for_exact_times(t,rid,data.get('lat'),data.get('lng'),data.get('local_time',''));audit(t,u,'recalculate','route',rid,'Rota restante recalculada',None,None,{'schedule_warnings':warnings});x=get_route_full(t,rid);x['schedule_warnings']=warnings;return self.send_json(x)
                 if action=='finish' and method=='POST':
                     if role!='driver':return self.send_json({'error':'Sem permissão'},403)
-                    r=get_route_full(t,rid)
-                    if any(s['status'] in ('pending','arrived') for s in r['stops']):return self.send_json({'error':'Ainda existem paradas pendentes'},409)
-                    Supa.update('routes',t,{'id':f'eq.{rid}'},{'status':'finished','finished_at':now_iso(),'finished_lat':data.get('lat'),'finished_lng':data.get('lng')});audit(t,u,'finish','route',rid,'Motorista finalizou a rota');return self.send_json(get_route_full(t,rid))
+                    r=try_auto_finish_route(t,u,rid,data.get('lat'),data.get('lng'))
+                    if r.get('status')!='finished':
+                        pending=[s for s in r.get('stops',[]) if s.get('status') in ('pending','arrived')]
+                        missing=[]
+                        weighed={int(w.get('stop_id')) for w in r.get('weighings',[]) if w.get('stop_id') is not None}
+                        for st in r.get('stops',[]):
+                            if st.get('status')=='completed' and st.get('service_type')=='collection' and int(st.get('id')) not in weighed: missing.append(st)
+                        if pending:return self.send_json({'error':'Ainda existem paradas pendentes. O Administrador deve resolvê-las antes da pesagem.'},409)
+                        if missing:return self.send_json({'error':'Aguarde a Produção registrar o peso e a foto das coletas realizadas.'},409)
+                        return self.send_json({'error':'A rota será finalizada automaticamente quando todos os requisitos forem concluídos.'},409)
+                    return self.send_json(r)
                 if method=='DELETE' and action is None:
                     if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                     reason=str(data.get('reason','')).strip()
@@ -895,25 +1039,75 @@ class AppHandler(BaseHTTPRequestHandler):
                     return self.send_json(result or {'ok':True})
             if path.startswith('/api/stops/') and method=='POST':
                 parts=path.strip('/').split('/');sid=int(parts[2]);action=parts[3]
+                stop=first(Supa.get('route_stops',t,{'id':f'eq.{sid}','select':'id,route_id,pev_id,status,service_type'}))
+                if not stop:return self.send_json({'error':'Parada não encontrada'},404)
+                route_id=int(stop['route_id'])
+                if action=='evidence':
+                    if role!='driver':return self.send_json({'error':'Sem permissão'},403)
+                    if stop.get('status') not in ('pending','arrived'):return self.send_json({'error':'Esta parada já foi encerrada'},409)
+                    route=first(Supa.get('routes',t,{'id':f'eq.{route_id}','select':'id,status,driver_id','limit':'1'}))
+                    if not route or route.get('status')!='in_progress' or route.get('driver_id')!=u['id']:return self.send_json({'error':'Esta rota não está disponível para registrar fotos'},409)
+                    evtype=str(data.get('evidence_type') or '')
+                    if evtype not in ('stop_location','drum'):return self.send_json({'error':'Tipo de evidência inválido para esta parada'},400)
+                    existing=Supa.get('route_evidences',t,{'stop_id':f'eq.{sid}','evidence_type':f'eq.{evtype}','select':'id','limit':'1'})
+                    if existing:return self.send_json({'error':'Esta foto obrigatória já foi registrada'},409)
+                    storage_path=upload_evidence(t,data.get('image_data'),f'rota-{route_id}/pev-{stop["pev_id"]}/{evtype}')
+                    ev=first(Supa.insert('route_evidences',t,{'route_id':route_id,'stop_id':sid,'pev_id':stop['pev_id'],'evidence_type':evtype,'storage_path':storage_path,'created_by':u['id']}))
+                    audit(t,u,'evidence','stop',sid,'Evidência fotográfica registrada',None,None,{'evidence_type':evtype,'storage_path':storage_path})
+                    return self.send_json({'ok':True,'evidence':ev})
+                if action=='admin-resolve':
+                    if role!='admin':return self.send_json({'error':'Sem permissão'},403)
+                    if stop.get('status') not in ('pending','arrived'):return self.send_json({'error':'Esta parada já foi resolvida'},409)
+                    resolution=data.get('resolution')
+                    if resolution not in ('completed','failed'):return self.send_json({'error':'Informe realizada ou não realizada'},400)
+                    upd={'status':resolution,'completed_at':now_iso(),'driver_note':data.get('note') or ''}
+                    if resolution=='failed':upd['failure_reason']=data.get('reason') or 'Resolvida pelo Administrador'
+                    Supa.update('route_stops',t,{'id':f'eq.{sid}'},upd)
+                    audit(t,u,'admin_resolve','stop',sid,'Administrador resolveu parada pendente',None,upd,{'route_id':route_id})
+                    return self.send_json(try_auto_finish_route(t,u,route_id))
                 if role!='driver':return self.send_json({'error':'Sem permissão'},403)
                 if action not in ('arrive','complete','fail'):return self.send_json({'error':'Ação inválida'},400)
+                if action in ('complete','fail'):
+                    evidences=Supa.get('route_evidences',t,{'stop_id':f'eq.{sid}','evidence_type':'in.(stop_location,drum)','select':'evidence_type'}) or []
+                    present={item.get('evidence_type') for item in evidences}
+                    missing=[]
+                    if 'stop_location' not in present:missing.append('foto do local')
+                    if 'drum' not in present:missing.append('foto do tambor')
+                    if missing:return self.send_json({'error':f'Adicione a {" e a ".join(missing)} antes de encerrar esta parada'},409)
                 result=Supa.rpc('update_stop_atomic',t,{'p_stop_id':sid,'p_action':action,'p_data':data})
-                route_id=int(result['route_id'])
-                updated=get_route_full(t,route_id)
-                # Ao encerrar a última parada (realizada ou não realizada), a rota é
-                # finalizada automaticamente. Evita deixar uma rota 4/4 como "Em andamento"
-                # aguardando um segundo clique do motorista.
-                if action in ('complete','fail') and updated.get('status')=='in_progress' and not any(st.get('status') in ('pending','arrived') for st in updated.get('stops',[])):
-                    finished_at=now_iso()
-                    Supa.update('routes',t,{'id':f'eq.{route_id}','status':'eq.in_progress'},{'status':'finished','finished_at':finished_at,'finished_lat':data.get('lat'),'finished_lng':data.get('lng')})
-                    audit(t,u,'finish','route',route_id,'Rota finalizada automaticamente após a última parada',None,None,{'automatic':True,'last_stop_id':sid,'last_stop_action':action})
-                    updated=get_route_full(t,route_id)
-                    updated['auto_finished']=True
-                return self.send_json(updated)
+                return self.send_json(try_auto_finish_route(t,u,int(result['route_id']),data.get('lat'),data.get('lng')))
+            if path.startswith('/api/routes/') and path.endswith('/weighings') and method=='POST':
+                rid=int(path.strip('/').split('/')[2])
+                if role!='production':return self.send_json({'error':'Sem permissão'},403)
+                stop_id=int(data.get('stop_id') or 0);weight=num(data.get('weight_kg'))
+                if not weight or weight<=0:return self.send_json({'error':'Informe um peso válido'},400)
+                stop=first(Supa.get('route_stops',t,{'id':f'eq.{stop_id}','route_id':f'eq.{rid}','select':'id,route_id,pev_id,status,service_type'}))
+                if not stop or stop.get('status')!='completed' or stop.get('service_type')!='collection':return self.send_json({'error':'Esta coleta não está liberada para pesagem'},409)
+                if Supa.get('route_weighings',t,{'stop_id':f'eq.{stop_id}','select':'id','limit':'1'}):return self.send_json({'error':'Esta coleta já possui pesagem'},409)
+                storage_path=upload_evidence(t,data.get('image_data'),f'rota-{rid}/pev-{stop["pev_id"]}/weighing_scale')
+                ev=first(Supa.insert('route_evidences',t,{'route_id':rid,'stop_id':stop_id,'pev_id':stop['pev_id'],'evidence_type':'weighing_scale','storage_path':storage_path,'created_by':u['id']}))
+                Supa.insert('route_weighings',t,{'route_id':rid,'stop_id':stop_id,'pev_id':stop['pev_id'],'weight_kg':weight,'evidence_id':ev['id'],'created_by':u['id']})
+                audit(t,u,'weighing','route',rid,f'Pesagem registrada: {weight:.3f} kg',None,None,{'stop_id':stop_id,'pev_id':stop['pev_id'],'weight_kg':weight})
+                remaining=production_weighing_items(t)
+                route_remaining=sum(1 for item in remaining if int(item.get('route_id') or 0)==rid)
+                return self.send_json({'ok':True,'finished':route_remaining==0,'remaining':route_remaining})
+            if path.startswith('/api/routes/') and path.endswith('/location') and method=='POST':
+                rid=int(path.strip('/').split('/')[2])
+                if role!='driver':return self.send_json({'error':'Sem permissão'},403)
+                if data.get('lat') is None or data.get('lng') is None:return self.send_json({'error':'Localização inválida'},400)
+                Supa.insert('driver_location_updates',t,{'route_id':rid,'driver_id':u['id'],'lat':data.get('lat'),'lng':data.get('lng'),'accuracy_m':data.get('accuracy')})
+                return self.send_json({'ok':True})
             if path=='/api/settings' and method=='PUT':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 old=first(Supa.get('settings',t,{'id':'eq.1','select':'*'}));upd={k:data.get(k) for k in ['company_name','origin_name','origin_mode','origin_cep','origin_street','origin_number','origin_complement','origin_district','origin_city','origin_state']};upd['origin_lat']=num(data.get('origin_lat'));upd['origin_lng']=num(data.get('origin_lng'));upd['origin_location_confirmed']=upd['origin_lat'] is not None and upd['origin_lng'] is not None;Supa.update('settings',t,{'id':'eq.1'},upd);audit(t,u,'update','settings',1,'Configurações alteradas',old,upd);return self.send_json({'ok':True})
             return self.send_json({'error':'Endpoint não encontrado'},404)
+        except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError) as e:
+            self._client_disconnected(e)
+            return
+        except SupaHTTPError as e:
+            print(f'[API ERROR] {method} {path}: SupaHTTPError {e.status}: {e}')
+            status=e.status if 400<=e.status<=599 else 502
+            return self.send_json({'error':e.public_message},status)
         except RuntimeError as e:
             msg=str(e);print(f'[API ERROR] {method} {path}: {msg}');status=409 if 'duplicate key' in msg.lower() or 'violates unique' in msg.lower() or 'já existe' in msg.lower() else 400;return self.send_json({'error':msg},status)
         except Exception as e:
@@ -927,7 +1121,10 @@ class AppHandler(BaseHTTPRequestHandler):
         try:target.relative_to(STATIC_DIR.resolve())
         except:return self.send_error(403)
         if not target.is_file():return self.send_error(404)
-        data=target.read_bytes();ctype=mimetypes.guess_type(str(target))[0] or 'application/octet-stream';self.send_response(200);self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-cache' if target.name in ('index.html','app.js','service-worker.js','sw.js') else 'public, max-age=3600');self.common_security_headers();self.end_headers();self.wfile.write(data)
+        data=target.read_bytes()
+        ctype=mimetypes.guess_type(str(target))[0] or 'application/octet-stream'
+        cache_control='no-cache' if target.name in ('index.html','app.js','service-worker.js','sw.js') else 'public, max-age=3600'
+        return self._send_payload(data,ctype,cache_control=cache_control)
     def log_message(self,fmt,*args): print(f'[{datetime.now().strftime("%H:%M:%S")}] {self.address_string()} - {fmt%args}')
 
 class RotaHTTPServer(ThreadingHTTPServer):
