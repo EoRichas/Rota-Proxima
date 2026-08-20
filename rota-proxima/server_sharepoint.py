@@ -95,6 +95,7 @@ def _upload_to_sharepoint(token, data_url, path_prefix):
     body = {
         'route_id': context['route_id'],
         'route_name': context['route_name'],
+        'pev_id': context['pev_id'],
         'pev_name': context['pev_name'],
         'evidence_type': context['evidence_type'],
         'filename': filename,
@@ -195,8 +196,7 @@ def _sync_after_insert(token, storage_path, data_url, path_prefix):
 
 
 def upload_evidence(token, data_url, path_prefix):
-    # Nenhuma evidência do ambiente de teste é importada. Somente novos uploads
-    # feitos neste ambiente entram no bucket e na fila de produção.
+    # Somente novos uploads deste ambiente entram no bucket e na fila de produção.
     storage_path = _ORIGINAL_UPLOAD(token, data_url, path_prefix)
     if not AZURE_FUNCTION_UPLOAD_URL:
         return storage_path
@@ -213,7 +213,7 @@ class SharePointHandler(rota.AppHandler):
         if path == '/api/health':
             return self.send_json({
                 'ok': True,
-                'build': 'SHAREPOINT-PRODUCAO-2026-08-20',
+                'build': 'SHAREPOINT-PRODUCAO-VISUAL-2026-08-20',
                 'listen': f'{rota.HOST}:{rota.PORT}',
                 'render': rota.IS_RENDER,
                 'external_url': os.environ.get('RENDER_EXTERNAL_URL', ''),
@@ -225,7 +225,7 @@ class SharePointHandler(rota.AppHandler):
 
 rota.upload_evidence = upload_evidence
 rota.AppHandler = SharePointHandler
-rota.BUILD_ID = 'SHAREPOINT-PRODUCAO-2026-08-20'
+rota.BUILD_ID = 'SHAREPOINT-PRODUCAO-VISUAL-2026-08-20'
 
 
 if __name__ == '__main__':
