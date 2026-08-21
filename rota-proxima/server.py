@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-import io, json, math, mimetypes, os, urllib.parse, urllib.request, time, threading, base64, uuid
+import gzip, io, json, math, mimetypes, os, urllib.parse, urllib.request, time, threading, base64, uuid
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, LongTable, TableStyle, Table, Image
 
 BASE_DIR=Path(__file__).resolve().parent
 STATIC_DIR=BASE_DIR/'static'
@@ -30,7 +25,7 @@ SUPABASE_UNAVAILABLE_MESSAGE='O serviço de dados está temporariamente indispon
 AUTH_REFRESH_UNAVAILABLE_MESSAGE='Não foi possível renovar sua sessão agora. Tente novamente em alguns instantes.'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
 SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
-BUILD_ID='PRODUCAO-PESAGENS-2026-08-20'
+BUILD_ID='RENDER-PERFORMANCE-2026-08-20'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -50,6 +45,8 @@ _GEO_CACHE_LOCK=threading.Lock()
 _GEO_CACHE_TTL=604800
 _NOMINATIM_LOCK=threading.Lock()
 _NOMINATIM_LAST=0.0
+_STATIC_ASSET_CACHE={}
+_STATIC_ASSET_CACHE_LOCK=threading.Lock()
 
 
 def now_iso(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -277,6 +274,14 @@ def _pdf_text(v):
     return str(v or '').replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
 
 def build_collections_pdf(items,date_from,date_to,filters=None):
+    # ReportLab custa uma parte relevante do cold start no plano gratuito do
+    # Render. Carregue-o somente quando alguém solicitar o relatório.
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, LongTable, TableStyle, Table, Image
+
     filters=filters or {}
     buf=io.BytesIO();styles=getSampleStyleSheet()
     green=colors.HexColor('#0B4F2F');green2=colors.HexColor('#176B43');gold=colors.HexColor('#B8860B')
@@ -592,6 +597,7 @@ def reorder_route_for_exact_times(token,route_id,start_lat=None,start_lng=None,l
 
 class AppHandler(BaseHTTPRequestHandler):
     server_version='RotaProxima/3.0'
+    protocol_version='HTTP/1.1'
     def route_path(self):return urllib.parse.urlparse(self.path).path
     def query(self):return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
     def read_json(self):
@@ -615,13 +621,21 @@ class AppHandler(BaseHTTPRequestHandler):
         print(f'[CLIENT DISCONNECTED] {method} {path}: {type(exc).__name__}')
     def _send_payload(self,raw,content_type,status=200,cache_control='no-store',extra_headers=None):
         try:
+            headers=dict(extra_headers or {})
+            compressible=(content_type.startswith('text/') or content_type.startswith('application/json') or content_type.startswith('application/javascript') or content_type.startswith('image/svg+xml'))
+            accepts_gzip='gzip' in (self.headers.get('Accept-Encoding') or '').lower()
+            if status not in (204,304) and len(raw)>=1024 and compressible:
+                headers.setdefault('Vary','Accept-Encoding')
+                if accepts_gzip and 'Content-Encoding' not in headers:
+                    raw=gzip.compress(raw,compresslevel=6)
+                    headers['Content-Encoding']='gzip'
             self.send_response(status)
             self.send_header('Content-Type',content_type)
             self.send_header('Content-Length',str(len(raw)))
             self.send_header('Cache-Control',cache_control)
             self.common_security_headers()
             for k,v in (getattr(self,'pending_headers',[]) or []):self.send_header(k,v)
-            for k,v in (extra_headers or {}).items():self.send_header(k,v)
+            for k,v in headers.items():self.send_header(k,v)
             self.end_headers()
             self.wfile.write(raw)
             return True
@@ -1121,10 +1135,26 @@ class AppHandler(BaseHTTPRequestHandler):
         try:target.relative_to(STATIC_DIR.resolve())
         except:return self.send_error(403)
         if not target.is_file():return self.send_error(404)
-        data=target.read_bytes()
+        stat=target.stat();cache_key=str(target)
+        with _STATIC_ASSET_CACHE_LOCK:
+            cached=_STATIC_ASSET_CACHE.get(cache_key)
+            if cached and cached[0]==stat.st_mtime_ns and cached[1]==stat.st_size:
+                data=cached[2]
+            else:
+                data=target.read_bytes()
+                _STATIC_ASSET_CACHE[cache_key]=(stat.st_mtime_ns,stat.st_size,data)
         ctype=mimetypes.guess_type(str(target))[0] or 'application/octet-stream'
-        cache_control='no-cache' if target.name in ('index.html','app.js','service-worker.js','sw.js') else 'public, max-age=3600'
-        return self._send_payload(data,ctype,cache_control=cache_control)
+        etag=f'W/"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        if self.headers.get('If-None-Match')==etag:
+            return self._send_payload(b'',ctype,status=304,cache_control='no-cache',extra_headers={'ETag':etag})
+        versioned=bool((self.query().get('v') or [''])[0])
+        if target.name in ('index.html','service-worker.js','sw.js'):
+            cache_control='no-cache'
+        elif versioned:
+            cache_control='public, max-age=31536000, immutable'
+        else:
+            cache_control='public, max-age=3600'
+        return self._send_payload(data,ctype,cache_control=cache_control,extra_headers={'ETag':etag})
     def log_message(self,fmt,*args): print(f'[{datetime.now().strftime("%H:%M:%S")}] {self.address_string()} - {fmt%args}')
 
 class RotaHTTPServer(ThreadingHTTPServer):

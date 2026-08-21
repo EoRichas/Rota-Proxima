@@ -213,7 +213,7 @@ class SharePointHandler(rota.AppHandler):
         if path == '/api/health':
             return self.send_json({
                 'ok': True,
-                'build': 'SHAREPOINT-PRODUCAO-VISUAL-2026-08-20',
+                'build': 'SHAREPOINT-RENDER-PERFORMANCE-2026-08-20',
                 'listen': f'{rota.HOST}:{rota.PORT}',
                 'render': rota.IS_RENDER,
                 'external_url': os.environ.get('RENDER_EXTERNAL_URL', ''),
@@ -225,7 +225,7 @@ class SharePointHandler(rota.AppHandler):
 
 rota.upload_evidence = upload_evidence
 rota.AppHandler = SharePointHandler
-rota.BUILD_ID = 'SHAREPOINT-PRODUCAO-VISUAL-2026-08-20'
+rota.BUILD_ID = 'SHAREPOINT-RENDER-PERFORMANCE-2026-08-20'
 
 
 if __name__ == '__main__':
