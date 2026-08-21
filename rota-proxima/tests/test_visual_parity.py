@@ -68,7 +68,8 @@ class VisualParityTests(unittest.TestCase):
     def test_sharepoint_upload_uses_reduced_folder_structure(self):
         function_source = (ROOT / 'function_app.py').read_text(encoding='utf-8')
         backend = (ROOT / 'server_sharepoint.py').read_text(encoding='utf-8')
-        self.assertIn('for segment in [year, month, route_folder, pev_folder]', function_source)
+        self.assertIn('for segment in [year, month]', function_source)
+        self.assertIn('_ensure_keyed_folder(', function_source)
         self.assertNotIn('category_folder', function_source)
         self.assertIn("'pev_id': context['pev_id']", backend)
 
