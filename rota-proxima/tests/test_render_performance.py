@@ -33,6 +33,7 @@ class RenderPerformanceTests(unittest.TestCase):
             for alias in node.names
         ]
         self.assertFalse(any(name.startswith('reportlab') for name in top_level_imports))
+        self.assertFalse(any(name.startswith('xlsxwriter') for name in top_level_imports))
 
     def test_repeat_visits_use_cached_application_shell(self):
         worker = (ROOT / 'static' / 'service-worker.js').read_text(encoding='utf-8')
