@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import gzip, io, json, math, mimetypes, os, urllib.parse, urllib.request, time, threading, base64, uuid
+import gzip, io, json, math, mimetypes, os, re, urllib.parse, urllib.request, time, threading, base64, uuid
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,7 +25,7 @@ SUPABASE_UNAVAILABLE_MESSAGE='O serviço de dados está temporariamente indispon
 AUTH_REFRESH_UNAVAILABLE_MESSAGE='Não foi possível renovar sua sessão agora. Tente novamente em alguns instantes.'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
 SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
-BUILD_ID='SESSION-ISOLATION-2026-08-21'
+BUILD_ID='PWA-DEVICE-SESSION-2026-08-21'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -655,12 +655,31 @@ class AppHandler(BaseHTTPRequestHandler):
         return self._send_payload(raw,content_type,status,extra_headers=headers)
     def auth_tokens(self):
         c=self.cookies();return c.get('rota_access'),c.get('rota_refresh')
+    def request_device_id(self):
+        value=(self.headers.get('X-Rota-Device-ID') or '').strip()
+        return value if re.fullmatch(r'[A-Za-z0-9_-]{16,128}',value) else None
+    def bound_device_id(self):
+        return self.cookies().get('rota_device')
+    def device_cookie_header(self,device_id,max_age=31536000):
+        secure='; Secure' if self.is_secure_request() else ''
+        value=device_id if max_age else ''
+        return ('Set-Cookie',f'rota_device={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}')
     def clear_auth_headers(self):
         secure='; Secure' if self.is_secure_request() else ''
-        self.pending_headers=[('Set-Cookie',f'rota_access=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}'),('Set-Cookie',f'rota_refresh=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}')]
-    def set_auth_headers(self,access,refresh):
+        self.pending_headers=[('Set-Cookie',f'rota_access=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}'),('Set-Cookie',f'rota_refresh=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}'),self.device_cookie_header('',0)]
+    def set_auth_headers(self,access,refresh,device_id=None):
         secure='; Secure' if self.is_secure_request() else ''
         self.pending_headers=[('Set-Cookie',f'rota_access={access}; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600{secure}'),('Set-Cookie',f'rota_refresh={refresh}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{secure}')]
+        device_id=device_id or self.bound_device_id() or self.request_device_id()
+        if device_id:self.pending_headers.append(self.device_cookie_header(device_id))
+    def validate_device_binding(self):
+        requested=self.request_device_id();bound=self.bound_device_id()
+        if bound and requested != bound:
+            self.clear_auth_headers()
+            return False
+        if requested and not bound:
+            self.pending_headers=list(getattr(self,'pending_headers',[]) or [])+[self.device_cookie_header(requested)]
+        return True
     def refresh(self,refresh):
         if not refresh:return None
         # Refresh tokens are single-use. Requisições paralelas do dashboard podem chegar
@@ -702,6 +721,7 @@ class AppHandler(BaseHTTPRequestHandler):
             self.set_auth_headers(access,new_refresh)
             return access
     def current_user(self):
+        if not self.validate_device_binding():return None
         access,refresh=self.auth_tokens()
         # The access-token cookie may expire before the Supabase session. If the
         # refresh cookie still exists, renew transparently instead of forcing login.
@@ -881,7 +901,7 @@ class AppHandler(BaseHTTPRequestHandler):
         try:
             if path=='/api/setup' and method=='POST':return self.send_json(edge('setup',data),201)
             if path=='/api/login' and method=='POST':
-                d=edge('login',data);self.set_auth_headers(d['access_token'],d['refresh_token']);return self.send_json({'user':d['user']})
+                d=edge('login',data);self.set_auth_headers(d['access_token'],d['refresh_token'],self.request_device_id());return self.send_json({'user':d['user']})
             if path=='/api/logout' and method=='POST':
                 access,_=self.auth_tokens()
                 if access:

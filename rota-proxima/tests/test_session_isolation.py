@@ -23,6 +23,47 @@ def handler_for(body=None):
 
 
 class SessionIsolationTests(unittest.TestCase):
+    def test_login_binds_auth_cookies_to_the_requesting_device(self):
+        handler = handler_for({'username': 'producao', 'password': 'senha-producao'})
+        handler.headers = {'X-Rota-Device-ID': 'device-production-0001'}
+        response = {
+            'access_token': 'access-production',
+            'refresh_token': 'refresh-production',
+            'user': {'id': 'production-id', 'role': 'production'},
+        }
+
+        with patch.object(server, 'edge', return_value=response):
+            handler.api_write('POST', '/api/login')
+
+        cookies = '\n'.join(value for name, value in handler.pending_headers if name == 'Set-Cookie')
+        self.assertIn('rota_device=device-production-0001', cookies)
+
+    def test_cookie_from_another_device_is_rejected_before_auth_lookup(self):
+        handler = handler_for()
+        handler.headers = {'X-Rota-Device-ID': 'device-production-0001'}
+        handler.cookies = lambda: {
+            'rota_access': 'access-driver',
+            'rota_refresh': 'refresh-driver',
+            'rota_device': 'device-driver-0000001',
+        }
+
+        with patch.object(server.Supa, 'rpc') as rpc:
+            user = handler.current_user()
+
+        self.assertIsNone(user)
+        rpc.assert_not_called()
+        cleared = '\n'.join(value for name, value in handler.pending_headers if name == 'Set-Cookie')
+        self.assertIn('rota_access=;', cleared)
+        self.assertIn('rota_refresh=;', cleared)
+        self.assertIn('rota_device=;', cleared)
+
+    def test_pwa_checks_the_expected_user_and_sends_device_id(self):
+        source = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
+        worker = (ROOT / 'static' / 'service-worker.js').read_text(encoding='utf-8')
+        self.assertIn("'X-Rota-Device-ID':DEVICE_ID", source)
+        self.assertIn('expectedUser !== String(me.user.id)', source)
+        self.assertIn('rota-proxima-device-session-20260821-v2', worker)
+
     def test_two_logins_keep_independent_cookie_pairs(self):
         production = handler_for({'username': 'producao', 'password': 'senha-producao'})
         driver = handler_for({'username': 'motorista', 'password': 'senha-motorista'})

@@ -41,6 +41,32 @@ const requestStatusLabel = {pending:'Pendente',scheduled:'Em rota',in_service:'E
 const apiCache = new Map();
 const apiPending = new Map();
 const apiCacheTtl = path => path.startsWith('/api/pevs') ? 30000 : path==='/api/drivers' ? 30000 : path==='/api/settings' ? 30000 : path==='/api/users' ? 15000 : 0;
+const DEVICE_ID_KEY = 'rota_proxima_device_id_v1';
+const EXPECTED_USER_KEY = 'rota_proxima_expected_user_v1';
+
+function localValue(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key) || '';
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch (_) {}
+  return value || '';
+}
+
+function createDeviceId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(20);
+  globalThis.crypto?.getRandomValues?.(bytes);
+  return [...bytes].map(value => value.toString(16).padStart(2, '0')).join('') || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+const DEVICE_ID = (() => {
+  const existing = localValue(DEVICE_ID_KEY);
+  if (/^[a-zA-Z0-9_-]{16,128}$/.test(existing)) return existing;
+  const generated = createDeviceId();
+  localValue(DEVICE_ID_KEY, generated);
+  return generated;
+})();
 
 function toast(msg, type='') {
   const el = $('#toast');
@@ -66,7 +92,7 @@ async function api(path, opts={}) {
   const pendingKey=method==='GET'?path:null;
   if(pendingKey && apiPending.has(pendingKey)) return apiPending.get(pendingKey);
   const run=(async()=>{
-    const config = {credentials:'same-origin', headers:{}, ...opts};
+    const config = {credentials:'same-origin', headers:{'X-Rota-Device-ID':DEVICE_ID}, ...opts};
     if (opts.body && typeof opts.body !== 'string') {
       config.headers['Content-Type'] = 'application/json';
       config.body = JSON.stringify(opts.body);
@@ -115,7 +141,16 @@ async function boot() {
   showAuthScreen(false,'Conectando ao servidor...');
   try {
     const me = await api('/api/me');
-    if (me.user) return enterApp(me.user);
+    if (me.user) {
+      const expectedUser = localValue(EXPECTED_USER_KEY);
+      if (expectedUser && expectedUser !== String(me.user.id)) {
+        await api('/api/logout', {method:'POST'}).catch(()=>{});
+        localValue(EXPECTED_USER_KEY, null);
+        throw new Error('Esta sessão não pertence a este aparelho. Entre novamente.');
+      }
+      localValue(EXPECTED_USER_KEY, String(me.user.id));
+      return enterApp(me.user);
+    }
   } catch (e) {
     sessionError=e.message || 'Não foi possível verificar sua sessão.';
   }
@@ -147,6 +182,7 @@ $('#loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   try {
     const data = await api('/api/login', {method:'POST', body:{username:$('#loginUsername').value, password:$('#loginPassword').value}});
+    localValue(EXPECTED_USER_KEY, String(data.user.id));
     $('#authStatus').classList.add('hidden');
     enterApp(data.user);
   } catch (err) {
@@ -157,6 +193,7 @@ $('#loginForm').addEventListener('submit', async e => {
 
 $('#logoutBtn').onclick = async () => {
   await api('/api/logout', {method:'POST'}).catch(()=>{});
+  localValue(EXPECTED_USER_KEY, null);
   location.reload();
 };
 $('#menuBtn').onclick = () => $('#sidebar').classList.toggle('open');

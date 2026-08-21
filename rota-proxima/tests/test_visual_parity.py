@@ -17,7 +17,7 @@ class VisualParityTests(unittest.TestCase):
         worker = (ROOT / 'static' / 'service-worker.js').read_text(encoding='utf-8')
         self.assertIn('styles.css?v=render-performance-20260820-1', html)
         self.assertIn('app.js?v=render-performance-20260820-1', html)
-        self.assertIn("rota-proxima-render-performance-20260820-v1", worker)
+        self.assertIn("rota-proxima-device-session-20260821-v2", worker)
 
     def test_all_current_test_ui_layers_are_loaded_in_production(self):
         html = (ROOT / 'static' / 'index.html').read_text(encoding='utf-8')
