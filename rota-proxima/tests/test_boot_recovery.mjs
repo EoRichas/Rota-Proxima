@@ -72,6 +72,7 @@ async function runScenario({setupFails=false}={}) {
     URL,
     Blob,
     FormData,
+    AbortController,
   });
   vm.runInContext(source,context,{filename:'static/app.js'});
   await new Promise(resolve=>setImmediate(resolve));

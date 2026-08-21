@@ -88,9 +88,12 @@ def _sharepoint_filename(evidence_type, raw, ext):
     return f'{prefix}_{digest[:20]}.{ext}', digest
 
 
-def _upload_to_sharepoint(token, data_url, path_prefix):
+def _upload_to_sharepoint(token, data_url, path_prefix, context=None):
     content_base64, raw, ext = _decode_image_data(data_url)
-    context = _evidence_context(token, path_prefix)
+    # O contexto é capturado antes de a evidência/pesagem alterar a
+    # visibilidade da Produção no Supabase. Mantemos o fallback apenas para
+    # compatibilidade com chamadas internas antigas.
+    context = dict(context) if context is not None else _evidence_context(token, path_prefix)
     filename, digest = _sharepoint_filename(context['evidence_type'], raw, ext)
     body = {
         'route_id': context['route_id'],
@@ -163,7 +166,7 @@ def _delete_supabase_object(token, storage_path):
         raise RuntimeError(detail or f'Falha ao limpar Storage: HTTP {response.status_code}')
 
 
-def _sync_after_insert(token, storage_path, data_url, path_prefix):
+def _sync_after_insert(token, storage_path, data_url, path_prefix, context):
     evidence = _find_evidence(token, storage_path)
     if not evidence:
         print(f'[SHAREPOINT] Evidência ainda pendente; registro não localizado: {storage_path}')
@@ -171,7 +174,12 @@ def _sync_after_insert(token, storage_path, data_url, path_prefix):
     evidence_id = int(evidence['id'])
     try:
         _mark_sync(token, evidence_id, status='syncing')
-        context, digest, sharepoint_data = _upload_to_sharepoint(token, data_url, path_prefix)
+        context, digest, sharepoint_data = _upload_to_sharepoint(
+            token,
+            data_url,
+            path_prefix,
+            context=context,
+        )
         sharepoint_data['sha256'] = digest
         _mark_sync(token, evidence_id, status='synced', data=sharepoint_data)
         print(
@@ -200,9 +208,13 @@ def upload_evidence(token, data_url, path_prefix):
     storage_path = _ORIGINAL_UPLOAD(token, data_url, path_prefix)
     if not AZURE_FUNCTION_UPLOAD_URL:
         return storage_path
+    # Esta função ainda está no fluxo síncrono da requisição: a evidência e a
+    # pesagem só serão inseridas pelo servidor depois que ela retornar. Assim,
+    # rota, PEV e data são resolvidos enquanto o usuário ainda pode consultá-los.
+    context = dict(_evidence_context(token, path_prefix))
     threading.Thread(
         target=_sync_after_insert,
-        args=(token, storage_path, data_url, path_prefix),
+        args=(token, storage_path, data_url, path_prefix, context),
         daemon=True,
     ).start()
     return storage_path
@@ -213,7 +225,7 @@ class SharePointHandler(rota.AppHandler):
         if path == '/api/health':
             return self.send_json({
                 'ok': True,
-                'build': 'SHAREPOINT-PWA-LOADING-RECOVERY-2026-08-21',
+                'build': 'SHAREPOINT-FOLDER-CONTEXT-2026-08-21',
                 'listen': f'{rota.HOST}:{rota.PORT}',
                 'render': rota.IS_RENDER,
                 'external_url': os.environ.get('RENDER_EXTERNAL_URL', ''),
@@ -225,7 +237,7 @@ class SharePointHandler(rota.AppHandler):
 
 rota.upload_evidence = upload_evidence
 rota.AppHandler = SharePointHandler
-rota.BUILD_ID = 'SHAREPOINT-PWA-LOADING-RECOVERY-2026-08-21'
+rota.BUILD_ID = 'SHAREPOINT-FOLDER-CONTEXT-2026-08-21'
 
 
 if __name__ == '__main__':
