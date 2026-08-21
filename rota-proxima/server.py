@@ -15,7 +15,7 @@ PORT=int(os.environ.get('PORT') or os.environ.get('ROTA_PORT','8080'))
 IS_RENDER=os.environ.get('RENDER','').strip().lower()=='true'
 FORCE_SECURE_COOKIES=IS_RENDER or os.environ.get('FORCE_SECURE_COOKIES','').strip().lower() in ('1','true','yes','on')
 SUPABASE_URL=os.environ.get('SUPABASE_URL','https://uufkwqdsixvuhiyoyyyy.supabase.co').rstrip('/')
-SUPABASE_KEY=os.environ.get('SUPABASE_PUBLISHABLE_KEY','sb_publishable_sPmkOHGfvef0VLAhnJZzcA_sOjRjmOE')
+SUPABASE_KEY=os.environ.get('SUPABASE_PUBLISHABLE_KEY','').strip()
 REST=f'{SUPABASE_URL}/rest/v1'
 AUTH=f'{SUPABASE_URL}/auth/v1'
 ADMIN_FN=f'{SUPABASE_URL}/functions/v1/rota-admin'
@@ -25,7 +25,7 @@ SUPABASE_UNAVAILABLE_MESSAGE='O serviço de dados está temporariamente indispon
 AUTH_REFRESH_UNAVAILABLE_MESSAGE='Não foi possível renovar sua sessão agora. Tente novamente em alguns instantes.'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
 SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
-BUILD_ID='PWA-LOADING-RECOVERY-2026-08-21'
+BUILD_ID='REPORT-EXPORTS-2026-08-21'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -276,6 +276,17 @@ def filter_collection_report(items,status='all',service_type='all',search='',pev
 def _pdf_text(v):
     return str(v or '').replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
 
+def _report_date(v):
+    value=str(v or '').strip()
+    match=re.match(r'^(\d{4})-(\d{2})-(\d{2})',value)
+    return f'{match.group(3)}/{match.group(2)}/{match.group(1)}' if match else (value or '—')
+
+def _report_weight(v,empty='—'):
+    if v in (None,''):return empty
+    try:value=float(v)
+    except (TypeError,ValueError):return empty
+    return f'{value:,.2f} kg'.replace(',','X').replace('.',',').replace('X','.')
+
 def build_collections_pdf(items,date_from,date_to,filters=None):
     # ReportLab custa uma parte relevante do cold start no plano gratuito do
     # Render. Carregue-o somente quando alguém solicitar o relatório.
@@ -283,30 +294,42 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_CENTER
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, LongTable, TableStyle, Table, Image
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, LongTable, TableStyle, Table, Flowable
 
     filters=filters or {}
     buf=io.BytesIO();styles=getSampleStyleSheet()
     green=colors.HexColor('#0B4F2F');green2=colors.HexColor('#176B43');gold=colors.HexColor('#B8860B')
     pale=colors.HexColor('#F5F8F5');line=colors.HexColor('#D8E0DA');muted=colors.HexColor('#5E6862');red=colors.HexColor('#A23A2A')
-    title=ParagraphStyle('ReportTitle',parent=styles['Title'],fontName='Helvetica-Bold',fontSize=23,leading=27,textColor=green,spaceAfter=5)
+    title=ParagraphStyle('ReportTitle',parent=styles['Title'],fontName='Helvetica-Bold',fontSize=22,leading=25,textColor=green,spaceAfter=5)
     subtitle=ParagraphStyle('Subtitle',parent=styles['BodyText'],fontName='Helvetica',fontSize=8.5,leading=11,textColor=muted)
     small=ParagraphStyle('Small',parent=styles['BodyText'],fontName='Helvetica',fontSize=7.2,leading=9,textColor=colors.HexColor('#25312B'))
     small_b=ParagraphStyle('SmallB',parent=small,fontName='Helvetica-Bold',textColor=green)
-    kpi_label=ParagraphStyle('KpiLabel',parent=small,fontName='Helvetica-Bold',fontSize=7.2,alignment=TA_CENTER,textColor=muted)
-    kpi_num=ParagraphStyle('KpiNum',parent=styles['BodyText'],fontName='Helvetica-Bold',fontSize=17,leading=19,alignment=TA_CENTER,textColor=green)
+    kpi_label=ParagraphStyle('KpiLabel',parent=small,fontName='Helvetica-Bold',fontSize=6.6,leading=8,alignment=TA_CENTER,textColor=muted)
+    kpi_num=ParagraphStyle('KpiNum',parent=styles['BodyText'],fontName='Helvetica-Bold',fontSize=13.5,leading=16,alignment=TA_CENTER,textColor=green)
     doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=28,leftMargin=28,topMargin=24,bottomMargin=34,title='Relatório Operacional de Coletas e Entregas - Cassola Ambiental')
+    content_width=A4[0]-doc.leftMargin-doc.rightMargin
 
     total=len(items);collections=sum(1 for x in items if x.get('service_type','collection')=='collection');deliveries=total-collections
     completed=sum(1 for x in items if x.get('status')=='completed');failed=sum(1 for x in items if x.get('status')=='failed');total_weight=sum(float(x.get('collected_weight_kg') or 0) for x in items);rate=round((completed/total*100),1) if total else 0
     logo_path=os.path.join(STATIC_DIR,'cassola-logo.jpeg')
-    logo=Image(logo_path,width=80,height=80) if os.path.exists(logo_path) else Paragraph('CASSOLA AMBIENTAL',small_b)
+    class CroppedLogo(Flowable):
+        """Exibe o logo oficial sem a faixa preta incorporada no rodapé do JPEG."""
+        def __init__(self,path,width=75):
+            super().__init__();self.path=str(path);self.width=width
+            self.full_height=width*(1280/1264);self.crop_height=self.full_height*(60/1280)
+            self.height=self.full_height-self.crop_height
+        def draw(self):
+            self.canv.saveState();clip=self.canv.beginPath();clip.rect(0,0,self.width,self.height)
+            self.canv.clipPath(clip,stroke=0,fill=0)
+            self.canv.drawImage(self.path,0,-self.crop_height,width=self.width,height=self.full_height,preserveAspectRatio=False,mask='auto')
+            self.canv.restoreState()
+    logo=CroppedLogo(logo_path) if os.path.exists(logo_path) else Paragraph('CASSOLA AMBIENTAL',small_b)
     issue=datetime.now().strftime('%d/%m/%Y %H:%M')
     header_right=Table([[Paragraph('CASSOLA AMBIENTAL',ParagraphStyle('Brand',parent=title,fontSize=14,leading=16)),Paragraph(f'<b>Emitido:</b> {issue}',small)],
-                        [Paragraph('Tecnologia e sustentabilidade na operação.',ParagraphStyle('BrandSub',parent=subtitle,textColor=gold)),Paragraph(f'<b>Período:</b> {date_from} a {date_to}',small)],
-                        [Paragraph('Relatório Operacional de<br/>Coletas e Entregas',title),'']],colWidths=[330,135])
+                        [Paragraph('Tecnologia e sustentabilidade na operação.',ParagraphStyle('BrandSub',parent=subtitle,textColor=gold,alignment=TA_CENTER)),Paragraph(f'<b>Período:</b> {_report_date(date_from)} a {_report_date(date_to)}',small)],
+                        [Paragraph('Relatório Operacional de<br/>Coletas e Entregas',title),'']],colWidths=[315,142])
     header_right.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('ALIGN',(1,0),(1,-1),'RIGHT'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),('TOPPADDING',(0,0),(-1,-1),1),('BOTTOMPADDING',(0,0),(-1,-1),1)]))
-    head=Table([[logo,header_right]],colWidths=[92,465]);head.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LINEBELOW',(0,0),(-1,-1),1,gold),('BOTTOMPADDING',(0,0),(-1,-1),10)]))
+    head=Table([[logo,header_right]],colWidths=[82,457]);head.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LINEBELOW',(0,0),(-1,-1),1,gold),('BOTTOMPADDING',(0,0),(-1,-1),10),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
 
     status_map={'all':'Todos','completed':'Realizadas','failed':'Não realizadas','pending':'Pendentes','arrived':'No local','skipped':'Puladas'}
     type_map={'all':'Todos','collection':'Coleta','delivery':'Entrega'}
@@ -314,13 +337,12 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
     if filters.get('pev') not in (None,'','all') and items: pev_name=items[0].get('pev_name') or 'PEV selecionada'
     if filters.get('route') not in (None,'','all') and items: route_name=items[0].get('route_name') or 'Rota selecionada'
     if filters.get('commercial') not in (None,'','all') and items and not filters.get('commercial_name'): commercial_name=items[0].get('commercial_owner_name') or 'Comercial selecionado'
-    filter_data=[[Paragraph('<b>FILTROS</b>',small_b),Paragraph(f'<b>Período</b><br/>{date_from} a {date_to}',small),Paragraph(f'<b>Comercial</b><br/>{_pdf_text(commercial_name)}',small),Paragraph(f'<b>PEV</b><br/>{_pdf_text(pev_name)}',small),Paragraph(f'<b>Rota</b><br/>{_pdf_text(route_name)}',small),Paragraph(f'<b>Tipo</b><br/>{type_map.get(filters.get("service_type","all"),"Todos")}',small),Paragraph(f'<b>Status</b><br/>{status_map.get(filters.get("status","all"),"Todos")}',small)]]
-    filter_table=Table(filter_data,colWidths=[45,75,75,105,72,60,65]);filter_table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),pale),('BOX',(0,0),(-1,-1),.6,line),('INNERGRID',(1,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+    filter_data=[[Paragraph('<b>FILTROS</b>',small_b),Paragraph(f'<b>Período</b><br/>{_report_date(date_from)} a {_report_date(date_to)}',small),Paragraph(f'<b>Comercial</b><br/>{_pdf_text(commercial_name)}',small),Paragraph(f'<b>PEV</b><br/>{_pdf_text(pev_name)}',small),Paragraph(f'<b>Rota</b><br/>{_pdf_text(route_name)}',small),Paragraph(f'<b>Tipo</b><br/>{type_map.get(filters.get("service_type","all"),"Todos")}',small),Paragraph(f'<b>Status</b><br/>{status_map.get(filters.get("status","all"),"Todos")}',small)]]
+    filter_table=Table(filter_data,colWidths=[45,83,82,105,80,70,74]);filter_table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),pale),('BOX',(0,0),(-1,-1),.6,line),('INNERGRID',(1,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
 
-    kpis=[('Visitas',total),('Coletas',collections),('Entregas',deliveries),('Realizadas',completed),('Não realizadas',failed),('Peso coletado',f'{total_weight:,.2f} kg'.replace(',','X').replace('.',',').replace('X','.'))]
-    krow=[]
-    for label,value in kpis:krow.append(Table([[Paragraph(label,kpi_label)],[Paragraph(str(value),kpi_num)]],colWidths=[87],rowHeights=[22,27]))
-    kpi_table=Table([krow],colWidths=[91]*6);kpi_table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),2),('RIGHTPADDING',(0,0),(-1,-1),2)]))
+    kpis=[('Total de visitas',total),('Coletas',collections),('Entregas',deliveries),('Realizadas',completed),('Não realizadas',failed),('Taxa de realização',f'{rate:.1f}%'.replace('.',',')),('Peso coletado',_report_weight(total_weight,'0,00 kg'))]
+    kpi_table=Table([[Paragraph(label,kpi_label) for label,_ in kpis],[Paragraph(str(value),kpi_num) for _,value in kpis]],colWidths=[content_width/7]*7,rowHeights=[20,26])
+    kpi_table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,-1),'CENTER'),('LINEAFTER',(0,0),(-2,-1),.35,line),('TEXTCOLOR',(4,1),(4,1),red),('LEFTPADDING',(0,0),(-1,-1),3),('RIGHTPADDING',(0,0),(-1,-1),3),('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(-1,-1),2)]))
 
     story=[head,Spacer(1,12),filter_table,Spacer(1,12),kpi_table,Spacer(1,12)]
     if filters.get('show_comparison') and filters.get('commercial','all')=='all':
@@ -341,13 +363,13 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
             comp_rows=[[Paragraph('Comercial',comp_head),Paragraph('PEVs',comp_head),Paragraph('Visitas',comp_head),Paragraph('Coletas',comp_head),Paragraph('Entregas',comp_head),Paragraph('Realizadas',comp_head),Paragraph('Taxa',comp_head),Paragraph('Peso',comp_head)]]
             for g in sorted(grouped.values(),key=lambda z:z['name'].lower()):
                 r=round(g['completed']/g['visits']*100,1) if g['visits'] else 0
-                comp_rows.append([Paragraph(_pdf_text(g['name']),small),str(g.get('pevs_total') or len(g['pevs'])),str(g['visits']),str(g['collections']),str(g['deliveries']),str(g['completed']),f'{r:.1f}%'.replace('.',','),f"{g['weight']:,.2f} kg".replace(',','X').replace('.',',').replace('X','.')])
-            comp=Table(comp_rows,repeatRows=1,colWidths=[125,48,55,55,55,58,55,78])
-            comp.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),green),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,1),(-1,-1),'CENTER'),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]))
+                comp_rows.append([Paragraph(_pdf_text(g['name']),small),Paragraph(str(g.get('pevs_total') or len(g['pevs'])),small),Paragraph(str(g['visits']),small),Paragraph(str(g['collections']),small),Paragraph(str(g['deliveries']),small),Paragraph(str(g['completed']),small),Paragraph(f'{r:.1f}%'.replace('.',','),small),Paragraph(_report_weight(g['weight'],'0,00 kg'),small)])
+            comp=Table(comp_rows,repeatRows=1,colWidths=[132,42,49,54,54,61,55,92])
+            comp.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),green),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),.35,line),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,1),(-1,-1),'CENTER'),('FONTNAME',(0,1),(-1,-1),'Helvetica'),('FONTSIZE',(0,1),(-1,-1),7.2),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]))
             story += [Paragraph('Comparativo por Comercial',ParagraphStyle('Section',parent=small_b,fontSize=10,leading=13)),Spacer(1,5),comp,Spacer(1,12)]
     if filters.get('pev') not in (None,'','all'):
         last=max((x for x in items if x.get('route_date')),key=lambda x:(str(x.get('route_date')),str(x.get('completed_at') or x.get('arrived_at') or '')),default=None)
-        selected=Table([[Paragraph('<b>PEV SELECIONADO</b><br/><font size="12"><b>'+_pdf_text(pev_name)+'</b></font>',small),Paragraph(f'<b>Visitas</b><br/><font size="14"><b>{total}</b></font>',small),Paragraph(f'<b>Coletas</b><br/><font size="14"><b>{collections}</b></font>',small),Paragraph(f'<b>Entregas</b><br/><font size="14"><b>{deliveries}</b></font>',small),Paragraph(f'<b>Peso</b><br/><font size="12"><b>{total_weight:,.2f} kg</b></font>'.replace(',','X').replace('.',',').replace('X','.'),small),Paragraph(f'<b>Última visita</b><br/>{_pdf_text((last or {}).get("route_date") or "-")}',small)]],colWidths=[185,66,66,66,92,82])
+        selected=Table([[Paragraph('<b>PEV SELECIONADO</b><br/><font size="12"><b>'+_pdf_text(pev_name)+'</b></font>',small),Paragraph(f'<b>Visitas</b><br/><font size="14"><b>{total}</b></font>',small),Paragraph(f'<b>Coletas</b><br/><font size="14"><b>{collections}</b></font>',small),Paragraph(f'<b>Entregas</b><br/><font size="14"><b>{deliveries}</b></font>',small),Paragraph(f'<b>Peso</b><br/><font size="12"><b>{_report_weight(total_weight,"0,00 kg")}</b></font>',small),Paragraph(f'<b>Última visita</b><br/>{_report_date((last or {}).get("route_date"))}',small)]],colWidths=[164,61,61,61,96,96])
         selected.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#F1F7F2')),('BOX',(0,0),(-1,-1),.7,colors.HexColor('#BFD3C5')),('INNERGRID',(1,0),(-1,-1),.35,colors.HexColor('#CAD8CE')),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
         story += [selected,Spacer(1,12)]
 
@@ -356,9 +378,15 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
     status_label={'completed':'Realizada','failed':'Não realizada','arrived':'No local','skipped':'Pulada','pending':'Pendente'}
     for x in items:
         note=x.get('failure_reason') or x.get('driver_note') or ''
-        rows.append([Paragraph(_pdf_text(x.get('route_date')),small),Paragraph(_pdf_text(SERVICE_TYPE_LABEL.get(x.get('service_type','collection'),'Coleta')),small),Paragraph(_pdf_text(x.get('pev_name')),small),Paragraph(_pdf_text(x.get('route_name')),small),Paragraph(_pdf_text((f"{float(x.get('collected_weight_kg')):.2f} kg" if x.get('collected_weight_kg') else '-')),small),Paragraph(_pdf_text(status_label.get(x.get('status'),x.get('status'))),small),Paragraph(_pdf_text(note),small)])
-    table=LongTable(rows,repeatRows=1,colWidths=[55,52,135,80,65,75,95])
+        location=' / '.join(v for v in (str(x.get('city') or '').strip(),str(x.get('state') or '').strip()) if v)
+        owner=str(x.get('commercial_owner_name') or '').strip()
+        context=' • '.join(v for v in (location,(f'Comercial: {owner}' if owner else '')) if v)
+        pev_cell=f'<b>{_pdf_text(x.get("pev_name") or "PEV")}</b>'+(f'<br/><font color="#5E6862" size="6.5">{_pdf_text(context)}</font>' if context else '')
+        rows.append([Paragraph(_report_date(x.get('route_date')),small),Paragraph(_pdf_text(SERVICE_TYPE_LABEL.get(x.get('service_type','collection'),'Coleta')),small),Paragraph(pev_cell,small),Paragraph(_pdf_text(x.get('route_name')),small),Paragraph(_report_weight(x.get('collected_weight_kg')),small),Paragraph(_pdf_text(status_label.get(x.get('status'),x.get('status'))),small),Paragraph(_pdf_text(note or '—'),small)])
+    if not items:rows.append([Paragraph('Nenhum registro encontrado para os filtros selecionados.',small),'','','','','',''])
+    table=LongTable(rows,repeatRows=1,colWidths=[52,51,139,78,67,74,78])
     style=[('BACKGROUND',(0,0),(-1,0),green),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),0.3,line),('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]
+    if not items:style += [('SPAN',(0,1),(-1,1)),('ALIGN',(0,1),(-1,1),'CENTER'),('TOPPADDING',(0,1),(-1,1),12),('BOTTOMPADDING',(0,1),(-1,1),12)]
     for i,x in enumerate(items,start=1):
         if x.get('status')=='failed': style.append(('TEXTCOLOR',(5,i),(5,i),red))
         elif x.get('status')=='completed': style.append(('TEXTCOLOR',(5,i),(5,i),green2))
@@ -371,6 +399,135 @@ def build_collections_pdf(items,date_from,date_to,filters=None):
         canvas.setFont('Helvetica',7);canvas.setFillColor(muted);canvas.drawString(28,12,'Cassola Ambiental - Relatório operacional gerado pelo Rota Próxima')
         canvas.drawRightString(w-28,12,f'Página {doc.page}');canvas.restoreState()
     doc.build(story,onFirstPage=footer,onLaterPages=footer);return buf.getvalue()
+
+def build_collections_xlsx(items,date_from,date_to,filters=None):
+    # Importação preguiçosa para não aumentar o tempo de inicialização do Render.
+    import xlsxwriter
+
+    filters=filters or {};buf=io.BytesIO()
+    workbook=xlsxwriter.Workbook(buf,{'in_memory':True})
+    workbook.set_properties({
+        'title':'Relatório Operacional de Coletas e Entregas',
+        'subject':'Operações registradas no Rota Próxima',
+        'company':'Cassola Ambiental',
+    })
+    green='#0B4F2F';green2='#176B43';gold='#B8860B';pale='#F1F7F2';line='#D8E0DA';muted='#5E6862';red='#A23A2A'
+    brand=workbook.add_format({'bold':True,'font_size':13,'font_color':green,'align':'center','valign':'vcenter'})
+    title=workbook.add_format({'bold':True,'font_size':19,'font_color':green,'align':'center','valign':'vcenter'})
+    subtitle=workbook.add_format({'font_size':9,'font_color':gold,'align':'center','valign':'vcenter'})
+    filter_fmt=workbook.add_format({'font_size':9,'font_color':'#25312B','bg_color':'#F5F8F5','border':1,'border_color':line,'text_wrap':True,'valign':'vcenter'})
+    kpi_label=workbook.add_format({'bold':True,'font_size':8,'font_color':muted,'align':'center','valign':'vcenter','bg_color':pale,'top':1,'left':1,'right':1,'border_color':line})
+    kpi_value=workbook.add_format({'bold':True,'font_size':14,'font_color':green,'align':'center','valign':'vcenter','bg_color':pale,'bottom':1,'left':1,'right':1,'border_color':line})
+    kpi_bad=workbook.add_format({'bold':True,'font_size':14,'font_color':red,'align':'center','valign':'vcenter','bg_color':pale,'bottom':1,'left':1,'right':1,'border_color':line})
+    kpi_percent=workbook.add_format({'bold':True,'font_size':14,'font_color':green,'align':'center','valign':'vcenter','bg_color':pale,'bottom':1,'left':1,'right':1,'border_color':line,'num_format':'0.0%'})
+    kpi_weight=workbook.add_format({'bold':True,'font_size':12,'font_color':green,'align':'center','valign':'vcenter','bg_color':pale,'bottom':1,'left':1,'right':1,'border_color':line,'num_format':'#,##0.00'})
+    section=workbook.add_format({'bold':True,'font_size':12,'font_color':green,'bottom':1,'bottom_color':gold})
+    table_header=workbook.add_format({'bold':True,'font_color':'#FFFFFF','bg_color':green2,'align':'center','valign':'vcenter','border':1,'border_color':line,'text_wrap':True})
+    table_body=workbook.add_format({'font_color':'#25312B','valign':'top','border':1,'border_color':line})
+    table_band=workbook.add_format({'font_color':'#25312B','valign':'top','border':1,'border_color':line,'bg_color':'#F8FBF8'})
+    table_number=workbook.add_format({'font_color':'#25312B','align':'center','border':1,'border_color':line,'num_format':'0'})
+    table_percent=workbook.add_format({'font_color':'#25312B','align':'center','border':1,'border_color':line,'num_format':'0.0%'})
+    table_weight=workbook.add_format({'font_color':'#25312B','align':'right','border':1,'border_color':line,'num_format':'#,##0.00'})
+    date_fmt=workbook.add_format({'num_format':'dd/mm/yyyy','valign':'top'})
+    weight_fmt=workbook.add_format({'num_format':'#,##0.00','valign':'top'})
+
+    management=bool(filters.get('show_comparison'))
+    status_map={'all':'Todos','completed':'Realizadas','failed':'Não realizadas','pending':'Pendentes','arrived':'No local','skipped':'Puladas'}
+    type_map={'all':'Todos','collection':'Coleta','delivery':'Entrega'}
+    commercial_name=filters.get('commercial_name') or 'Todos'
+    pev_name='Todos';route_name='Todas'
+    if filters.get('pev') not in (None,'','all') and items:pev_name=items[0].get('pev_name') or 'PEV selecionado'
+    if filters.get('route') not in (None,'','all') and items:route_name=items[0].get('route_name') or 'Rota selecionada'
+    filter_text=(f'Período: {_report_date(date_from)} a {_report_date(date_to)}   |   Comercial: {commercial_name}   |   '
+                 f'PEV: {pev_name}   |   Rota: {route_name}   |   Tipo: {type_map.get(filters.get("service_type","all"),"Todos")}   |   '
+                 f'Status: {status_map.get(filters.get("status","all"),"Todos")}')
+
+    total=len(items);collections=sum(1 for x in items if x.get('service_type','collection')=='collection');deliveries=total-collections
+    completed=sum(1 for x in items if x.get('status')=='completed');failed=sum(1 for x in items if x.get('status')=='failed')
+    total_weight=sum(float(x.get('collected_weight_kg') or 0) for x in items);rate=(completed/total) if total else 0
+    summary=workbook.add_worksheet('Resumo')
+    summary.hide_gridlines(2);summary.set_zoom(90);summary.set_landscape();summary.fit_to_pages(1,1);summary.set_margins(.3,.3,.45,.45)
+    summary.set_column(0,13,11.5);summary.set_column(0,0,22)
+    summary.merge_range(0,0,0,13,'CASSOLA AMBIENTAL',brand)
+    summary.merge_range(1,0,1,13,'Tecnologia e sustentabilidade na operação.',subtitle)
+    summary.merge_range(2,0,2,13,'Relatório Operacional de Coletas e Entregas',title)
+    summary.merge_range(4,0,4,13,filter_text,filter_fmt)
+    summary.set_row(0,22);summary.set_row(1,18);summary.set_row(2,34);summary.set_row(4,30)
+    kpis=[('Total de visitas',total,kpi_value),('Coletas',collections,kpi_value),('Entregas',deliveries,kpi_value),('Realizadas',completed,kpi_value),('Não realizadas',failed,kpi_bad),('Taxa de realização',rate,kpi_percent),('Peso coletado (kg)',total_weight,kpi_weight)]
+    for index,(label,value,value_format) in enumerate(kpis):
+        start=index*2;summary.merge_range(6,start,6,start+1,label,kpi_label);summary.merge_range(7,start,7,start+1,value,value_format)
+    summary.set_row(6,23);summary.set_row(7,29)
+
+    def aggregate(key_field,name_field,portfolio=None):
+        groups={}
+        if portfolio:
+            for key,value in portfolio.items():groups[str(key)]={'name':value.get('name') or 'Comercial','pevs_total':int(value.get('pevs') or 0),'pevs':set(),'visits':0,'collections':0,'deliveries':0,'completed':0,'failed':0,'weight':0}
+        for item in items:
+            key=str(item.get(key_field) or '')
+            if not key:continue
+            group=groups.setdefault(key,{'name':item.get(name_field) or 'Não definido','pevs_total':0,'pevs':set(),'visits':0,'collections':0,'deliveries':0,'completed':0,'failed':0,'weight':0})
+            group['pevs'].add(item.get('pev_id'));group['visits']+=1
+            group['collections' if item.get('service_type','collection')=='collection' else 'deliveries']+=1
+            if item.get('status')=='completed':group['completed']+=1
+            elif item.get('status')=='failed':group['failed']+=1
+            group['weight']+=float(item.get('collected_weight_kg') or 0)
+        return sorted(groups.values(),key=lambda value:value['name'].lower())
+
+    compare_commercial=management and filters.get('commercial','all')=='all'
+    summary.merge_range(10,0,10,13,'Comparativo por Comercial' if compare_commercial else 'Resumo por PEV / Local',section)
+    summary_headers=(['Comercial','PEVs','Visitas','Coletas','Entregas','Realizadas','Não realizadas','Taxa','Peso coletado (kg)'] if compare_commercial else ['PEV / Local','Visitas','Coletas','Entregas','Realizadas','Não realizadas','Taxa','Peso coletado (kg)'])
+    groups=aggregate('commercial_owner_id','commercial_owner_name',filters.get('portfolio') or {}) if compare_commercial else aggregate('pev_id','pev_name')
+    for col,header in enumerate(summary_headers):summary.write(12,col,header,table_header)
+    for row_index,group in enumerate(groups,start=13):
+        base_format=table_band if row_index%2==0 else table_body
+        values=([group['name'],group.get('pevs_total') or len(group['pevs']),group['visits'],group['collections'],group['deliveries'],group['completed'],group['failed'],group['completed']/group['visits'] if group['visits'] else 0,group['weight']] if compare_commercial else [group['name'],group['visits'],group['collections'],group['deliveries'],group['completed'],group['failed'],group['completed']/group['visits'] if group['visits'] else 0,group['weight']])
+        for col,value in enumerate(values):
+            value_format=base_format
+            if col>0:value_format=table_number
+            if col==len(values)-2:value_format=table_percent
+            elif col==len(values)-1:value_format=table_weight
+            summary.write(row_index,col,value,value_format)
+    if not groups:summary.merge_range(13,0,13,len(summary_headers)-1,'Nenhum registro encontrado para os filtros selecionados.',table_body)
+    summary.set_column(0,0,28);summary.set_column(1,len(summary_headers)-1,16);summary.freeze_panes(13,0)
+    summary.set_footer('&LCassola Ambiental - Rota Próxima&CResumo operacional&R&P de &N')
+
+    status_label={'completed':'Realizada','failed':'Não realizada','arrived':'No local','skipped':'Pulada','pending':'Pendente'}
+    headers=['Data','Tipo de atendimento','PEV / Local','Cidade','UF']
+    if management:headers.append('Comercial responsável')
+    headers += ['Rota','Peso coletado (kg)','Status','Motivo / observação']
+    last_col=len(headers)-1
+    data=[]
+    for item in items:
+        try:route_date=datetime.strptime(str(item.get('route_date') or '')[:10],'%Y-%m-%d')
+        except ValueError:route_date=str(item.get('route_date') or '')
+        row=[route_date,SERVICE_TYPE_LABEL.get(item.get('service_type','collection'),'Coleta'),item.get('pev_name') or 'PEV',item.get('city') or '',item.get('state') or '']
+        if management:row.append(item.get('commercial_owner_name') or 'Não definido')
+        row += [item.get('route_name') or 'Rota',float(item.get('collected_weight_kg')) if item.get('collected_weight_kg') not in (None,'') else None,status_label.get(item.get('status'),item.get('status') or ''),item.get('failure_reason') or item.get('driver_note') or '']
+        data.append(row)
+    sheet=workbook.add_worksheet('Operações')
+    sheet.hide_gridlines(2);sheet.set_zoom(85);sheet.set_landscape();sheet.fit_to_pages(1,0);sheet.set_margins(.25,.25,.45,.45)
+    sheet.merge_range(0,0,0,last_col,'CASSOLA AMBIENTAL',brand)
+    sheet.merge_range(1,0,1,last_col,'Relatório Operacional — Detalhamento',title)
+    sheet.merge_range(3,0,3,last_col,filter_text,filter_fmt)
+    sheet.set_row(0,22);sheet.set_row(1,32);sheet.set_row(3,30)
+    start_row=5
+    table_columns=[]
+    for header in headers:
+        column={'header':header}
+        if header=='Data':column['format']=date_fmt
+        elif header=='Peso coletado (kg)':column['format']=weight_fmt
+        table_columns.append(column)
+    if data:
+        sheet.add_table(start_row,0,start_row+len(data),last_col,{'name':'TabelaOperacional','data':data,'columns':table_columns,'style':'Table Style Medium 4'})
+        sheet.conditional_format(start_row+1,headers.index('Status'),start_row+len(data),headers.index('Status'),{'type':'text','criteria':'containing','value':'Não realizada','format':workbook.add_format({'font_color':red,'bg_color':'#FCECEC'})})
+    else:
+        for col,header in enumerate(headers):sheet.write(start_row,col,header,workbook.add_format({'bold':True,'font_color':'#FFFFFF','bg_color':green2,'border':1,'border_color':line}))
+        sheet.merge_range(start_row+1,0,start_row+1,last_col,'Nenhum registro encontrado para os filtros selecionados.',workbook.add_format({'font_color':muted,'align':'center','valign':'vcenter'}))
+    widths={'Data':12,'Tipo de atendimento':20,'PEV / Local':34,'Cidade':18,'UF':7,'Comercial responsável':23,'Rota':18,'Peso coletado (kg)':19,'Status':17,'Motivo / observação':38}
+    for col,header in enumerate(headers):sheet.set_column(col,col,widths[header])
+    sheet.freeze_panes(start_row+1,0);sheet.repeat_rows(start_row);sheet.set_footer('&LCassola Ambiental - Rota Próxima&CRelatório operacional&R&P de &N')
+
+    workbook.close();buf.seek(0);return buf.getvalue()
 
 class SupaHTTPError(RuntimeError):
     def __init__(self,status,message,public_message=None):
@@ -849,7 +1006,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not r:return self.send_json({'error':'Rota não encontrada'},404)
                 if role=='driver' and r['driver_id']!=u['id']:return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json(r)
-            if path in ('/api/reports/collections','/api/reports/collections/pdf'):
+            if path in ('/api/reports/collections','/api/reports/collections/pdf','/api/reports/collections/xlsx'):
                 if role not in ('admin','commercial_manager','commercial'):return self.send_json({'error':'Sem permissão'},403)
                 date_from=(q.get('from') or [''])[0].strip();date_to=(q.get('to') or [''])[0].strip()
                 if not date_from or not date_to:return self.send_json({'error':'Informe o período do relatório'},400)
@@ -859,16 +1016,22 @@ class AppHandler(BaseHTTPRequestHandler):
                 if d1>d2:return self.send_json({'error':'A data inicial não pode ser maior que a final'},400)
                 if (d2-d1).days>366:return self.send_json({'error':'O período máximo do relatório é de 367 dias'},400)
                 items=collection_report_items(t,date_from,date_to)
-                if path.endswith('/pdf'):
-                    requested_commercial=(q.get('commercial') or ['all'])[0]
-                    effective_commercial=requested_commercial if role in ('admin','commercial_manager') else str(u['id'])
+                requested_commercial=(q.get('commercial') or ['all'])[0]
+                effective_commercial=requested_commercial if role in ('admin','commercial_manager') else str(u['id'])
+                # O isolamento do Comercial ocorre no servidor. Alterar a query ou
+                # chamar a API diretamente nunca libera registros de outra carteira.
+                if role=='commercial':items=filter_collection_report(items,commercial=effective_commercial)
+                if path.endswith('/pdf') or path.endswith('/xlsx'):
                     commercial_name=u.get('name','') if role=='commercial' else ''
                     portfolio=commercial_portfolio_summary(t) if role in ('admin','commercial_manager') else {}
                     if role in ('admin','commercial_manager') and effective_commercial!='all': commercial_name=(portfolio.get(str(effective_commercial)) or {}).get('name','')
                     filters={'status':(q.get('status') or ['all'])[0],'service_type':(q.get('service_type') or ['all'])[0],'q':(q.get('q') or [''])[0],'pev':(q.get('pev') or ['all'])[0],'route':(q.get('route') or ['all'])[0],'commercial':effective_commercial,'commercial_name':commercial_name,'show_comparison':role in ('admin','commercial_manager'),'portfolio':portfolio}
                     items=filter_collection_report(items,filters['status'],filters['service_type'],filters['q'],filters['pev'],filters['route'],filters['commercial'])
-                    raw=build_collections_pdf(items,date_from,date_to,filters)
-                    return self.send_bytes(raw,'application/pdf',filename=f'relatorio-coletas-entregas-{date_from}-a-{date_to}.pdf')
+                    if path.endswith('/pdf'):
+                        raw=build_collections_pdf(items,date_from,date_to,filters)
+                        return self.send_bytes(raw,'application/pdf',filename=f'relatorio-coletas-entregas-{date_from}-a-{date_to}.pdf')
+                    raw=build_collections_xlsx(items,date_from,date_to,filters)
+                    return self.send_bytes(raw,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',filename=f'relatorio-coletas-entregas-{date_from}-a-{date_to}.xlsx')
                 return self.send_json({'items':items})
             if path in ('/api/dashboard','/api/dashboard-pending'):
                 if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
