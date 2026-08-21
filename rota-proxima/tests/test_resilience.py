@@ -25,7 +25,7 @@ class SupabaseResilienceTests(unittest.TestCase):
             "HTTPSConnectionPool(host='example.supabase.co'): Read timed out."
         )
         output = io.StringIO()
-        with patch.object(server.HTTP, 'post', side_effect=error, create=True) as post:
+        with patch.object(server, 'stateless_post', side_effect=error) as post:
             with contextlib.redirect_stdout(output):
                 with self.assertRaises(server.SupaHTTPError) as raised:
                     handler.refresh('refresh-token-secreto')

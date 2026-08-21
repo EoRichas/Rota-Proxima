@@ -25,7 +25,7 @@ SUPABASE_UNAVAILABLE_MESSAGE='O serviço de dados está temporariamente indispon
 AUTH_REFRESH_UNAVAILABLE_MESSAGE='Não foi possível renovar sua sessão agora. Tente novamente em alguns instantes.'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
 SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
-BUILD_ID='RENDER-PERFORMANCE-2026-08-20'
+BUILD_ID='SESSION-ISOLATION-2026-08-21'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -50,6 +50,9 @@ _STATIC_ASSET_CACHE_LOCK=threading.Lock()
 
 
 def now_iso(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
+def stateless_post(url,**kwargs):
+    """POST sem cookie jar compartilhado entre requisições de aparelhos distintos."""
+    return requests.post(url,**kwargs)
 def clean_cep(v): return ''.join(c for c in str(v or '') if c.isdigit())
 def hms(v): return str(v or '')[:5]
 def num(v):
@@ -492,7 +495,9 @@ def try_auto_finish_route(token,user,route_id,lat=None,lng=None):
 def edge(action,body=None,token=None):
     h={'apikey':SUPABASE_KEY,'Content-Type':'application/json'}
     if token:h['Authorization']=f'Bearer {token}'
-    r=HTTP.post(ADMIN_FN,headers=h,json={'action':action,**(body or {})},timeout=20)
+    # Login e operações administrativas não reutilizam a cookie jar da sessão
+    # HTTP global. Assim uma resposta de autenticação nunca contamina outro aparelho.
+    r=stateless_post(ADMIN_FN,headers=h,json={'action':action,**(body or {})},timeout=20)
     try:d=r.json()
     except:d={'error':r.text}
     if not r.ok:raise RuntimeError(d.get('error') or f'Erro {r.status_code}')
@@ -672,7 +677,7 @@ class AppHandler(BaseHTTPRequestHandler):
             try:
                 # O refresh token pode já ter sido consumido mesmo sem a resposta chegar.
                 # Por isso não há retry automático desta requisição.
-                r=HTTP.post(f'{AUTH}/token?grant_type=refresh_token',headers={'apikey':SUPABASE_KEY,'Content-Type':'application/json'},json={'refresh_token':refresh},timeout=SUPABASE_HTTP_TIMEOUT)
+                r=stateless_post(f'{AUTH}/token?grant_type=refresh_token',headers={'apikey':SUPABASE_KEY,'Content-Type':'application/json'},json={'refresh_token':refresh},timeout=SUPABASE_HTTP_TIMEOUT)
             except requests.RequestException as e:
                 print(f'[AUTH REFRESH NETWORK ERROR] {type(e).__name__}: {e}')
                 raise SupaHTTPError(503,str(e),AUTH_REFRESH_UNAVAILABLE_MESSAGE) from e
@@ -880,7 +885,9 @@ class AppHandler(BaseHTTPRequestHandler):
             if path=='/api/logout' and method=='POST':
                 access,_=self.auth_tokens()
                 if access:
-                    try: HTTP.post(f'{AUTH}/logout',headers={'apikey':SUPABASE_KEY,'Authorization':f'Bearer {access}'},timeout=10)
+                    # O escopo padrão do Supabase é global. Isso encerrava o mesmo
+                    # usuário em todos os celulares. Local revoga só esta sessão.
+                    try: stateless_post(f'{AUTH}/logout?scope=local',headers={'apikey':SUPABASE_KEY,'Authorization':f'Bearer {access}'},timeout=10)
                     except: pass
                 self.clear_auth_headers();return self.send_json({'ok':True})
             u=self.require_user();

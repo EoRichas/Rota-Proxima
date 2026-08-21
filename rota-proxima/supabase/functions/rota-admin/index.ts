@@ -4,7 +4,9 @@ const url = Deno.env.get('SUPABASE_URL')!
 const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const admin = createClient(url, service, { auth: { persistSession: false, autoRefreshToken: false } })
-const anon = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } })
+const createAuthClient = () => createClient(url, anonKey, {
+  auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+})
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -115,7 +117,12 @@ Deno.serve(async (req) => {
         return send({ error: 'Usuário ou senha inválidos' }, 401)
       }
 
-      const { data, error } = await anon.auth.signInWithPassword({ email: profile.auth_email, password })
+      // A Edge Function pode atender vários celulares no mesmo isolate. Um cliente
+      // novo por login impede que a sessão em memória de um usuário seja reutilizada.
+      const { data, error } = await createAuthClient().auth.signInWithPassword({
+        email: profile.auth_email,
+        password,
+      })
       await admin.from('login_attempts').insert({
         username: user,
         success: !error,
@@ -140,7 +147,7 @@ Deno.serve(async (req) => {
       const current = String(body.current_password || '')
       const next = String(body.new_password || '')
       if (next.length < 8) return send({ error: 'A nova senha deve ter pelo menos 8 caracteres' }, 400)
-      const { error: verifyError } = await anon.auth.signInWithPassword({
+      const { error: verifyError } = await createAuthClient().auth.signInWithPassword({
         email: currentActor.auth_email,
         password: current,
       })
