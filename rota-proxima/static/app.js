@@ -86,24 +86,44 @@ function showAuthScreen(needsSetup=false, message='') {
 
 async function api(path, opts={}) {
   const method=(opts.method||'GET').toUpperCase();
+  const {timeoutMs:configuredTimeout, ...requestOpts}=opts;
   const ttl=method==='GET'?apiCacheTtl(path):0;
   const cached=ttl?apiCache.get(path):null;
   if(cached && Date.now()-cached.at<ttl) return cached.data;
   const pendingKey=method==='GET'?path:null;
   if(pendingKey && apiPending.has(pendingKey)) return apiPending.get(pendingKey);
   const run=(async()=>{
-    const config = {credentials:'same-origin', headers:{'X-Rota-Device-ID':DEVICE_ID}, ...opts};
-    if (opts.body && typeof opts.body !== 'string') {
+    const controller=new AbortController();
+    const timeoutMs=configuredTimeout??(method==='GET'?45000:120000);
+    const timer=requestOpts.signal?null:setTimeout(()=>controller.abort(),timeoutMs);
+    const config = {
+      credentials:'same-origin',
+      ...requestOpts,
+      headers:{'X-Rota-Device-ID':DEVICE_ID,...(requestOpts.headers||{})},
+      signal:requestOpts.signal||controller.signal,
+    };
+    if (requestOpts.body && typeof requestOpts.body !== 'string') {
       config.headers['Content-Type'] = 'application/json';
-      config.body = JSON.stringify(opts.body);
+      config.body = JSON.stringify(requestOpts.body);
     }
-    const res = await fetch(path, config);
-    let data = {};
-    try { data = await res.json(); } catch {}
-    if (!res.ok) throw new Error(data.error || `Erro ${res.status}`);
-    if(ttl) apiCache.set(path,{at:Date.now(),data});
-    if(method!=='GET') apiCache.clear();
-    return data;
+    try {
+      const res = await fetch(path, config);
+      let data = {};
+      try { data = await res.json(); } catch {}
+      if (!res.ok) {
+        const error=new Error(data.error || `Erro ${res.status}`);
+        error.status=res.status;
+        throw error;
+      }
+      if(ttl) apiCache.set(path,{at:Date.now(),data});
+      if(method!=='GET') apiCache.clear();
+      return data;
+    } catch (error) {
+      if(error?.name==='AbortError') throw new Error('O servidor demorou para responder. Tente novamente.');
+      throw error;
+    } finally {
+      if(timer)clearTimeout(timer);
+    }
   })();
   if(pendingKey) apiPending.set(pendingKey,run);
   try{return await run;}finally{if(pendingKey) apiPending.delete(pendingKey);}
@@ -228,18 +248,29 @@ async function go(page) {
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.page === page));
   $('#page').innerHTML = `<div class="empty">Carregando...</div>`;
   try {
-    if (page === 'dashboard') return renderDashboard();
-    if (page === 'planner') return renderPlanner();
-    if (page === 'pevs') return renderPevs();
-    if (page === 'requests') return renderRequests();
-    if (page === 'routes') return renderRoutes();
-    if (page === 'users') return renderUsers();
-    if (page === 'reports') return renderCollectionReport();
-    if (page === 'settings') return renderSettings();
-    if (page === 'driver') return renderDriverHome();
-    if (page === 'production') return renderProduction();
-    if (page === 'history') return renderHistory();
-  } catch (e) { $('#page').innerHTML = `<div class="warning">${esc(e.message)}</div>`; }
+    if (page === 'dashboard') return await renderDashboard();
+    if (page === 'planner') return await renderPlanner();
+    if (page === 'pevs') return await renderPevs();
+    if (page === 'requests') return await renderRequests();
+    if (page === 'routes') return await renderRoutes();
+    if (page === 'users') return await renderUsers();
+    if (page === 'reports') return await renderCollectionReport();
+    if (page === 'settings') return await renderSettings();
+    if (page === 'driver') return await renderDriverHome();
+    if (page === 'production') return await renderProduction();
+    if (page === 'history') return await renderHistory();
+    throw new Error('Tela não encontrada.');
+  } catch (e) {
+    if(e?.status===401){
+      state.user=null;
+      apiCache.clear();
+      localValue(EXPECTED_USER_KEY,null);
+      showAuthScreen(false,'Sua sessão expirou ou não pertence a este aparelho. Entre novamente.');
+      return;
+    }
+    $('#page').innerHTML = `<div class="warning page-load-error"><strong>Não foi possível carregar esta tela.</strong><span>${esc(e.message||'Erro inesperado.')}</span><button id="retryPage" class="btn secondary">Tentar novamente</button></div>`;
+    $('#retryPage').onclick=()=>go(page);
+  }
 }
 
 async function loadCore() {

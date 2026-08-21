@@ -57,6 +57,17 @@ class SupabaseResilienceTests(unittest.TestCase):
         self.assertEqual(server.AUTH_REFRESH_UNAVAILABLE_MESSAGE, body['error'])
         self.assertNotIn('detalhe interno', body['error'])
 
+    def test_page_loading_catches_async_failures_and_offers_retry(self):
+        source = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
+        self.assertIn("return await renderDashboard()", source)
+        self.assertIn("return await renderProduction()", source)
+        self.assertNotIn("return renderDashboard()", source)
+        self.assertIn('id="retryPage"', source)
+        self.assertIn("new AbortController()", source)
+        self.assertIn("O servidor demorou para responder", source)
+        self.assertIn("if(e?.status===401)", source)
+        self.assertIn("Sua sessão expirou ou não pertence a este aparelho", source)
+
 
 if __name__ == '__main__':
     unittest.main()
