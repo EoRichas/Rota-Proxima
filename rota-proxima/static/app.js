@@ -129,6 +129,38 @@ async function api(path, opts={}) {
   try{return await run;}finally{if(pendingKey) apiPending.delete(pendingKey);}
 }
 
+function responseFilename(response, fallbackName) {
+  const disposition=response.headers.get('Content-Disposition')||'';
+  const encoded=disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if(encoded?.[1]){
+    try{return decodeURIComponent(encoded[1].trim());}catch(_){}
+  }
+  const plain=disposition.match(/filename="?([^";]+)"?/i);
+  return plain?.[1]?.trim()||fallbackName;
+}
+
+async function downloadAuthenticated(path, fallbackName) {
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),120000);
+  try{
+    const response=await fetch(path,{credentials:'same-origin',headers:{'X-Rota-Device-ID':DEVICE_ID},signal:controller.signal});
+    if(!response.ok){
+      let message=`Erro ${response.status}`;
+      try{message=(await response.json()).error||message;}catch(_){}
+      const error=new Error(message);error.status=response.status;throw error;
+    }
+    const blob=await response.blob();
+    const url=URL.createObjectURL(blob);
+    const anchor=document.createElement('a');
+    anchor.href=url;anchor.download=responseFilename(response,fallbackName);
+    document.body.appendChild(anchor);anchor.click();anchor.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(error){
+    if(error?.name==='AbortError')throw new Error('O relatório demorou para ser gerado. Tente novamente.');
+    throw error;
+  }finally{clearTimeout(timer);}
+}
+
 function modal(html) {
   $('#modalContent').innerHTML = html;
   const dlg = $('#modal');
@@ -677,9 +709,8 @@ async function renderCollectionReport(){
   const filtered=()=>{const status=$('#reportStatus').value,type=$('#reportServiceType').value,pev=$('#reportPev').value;return baseByCommercial().filter(x=>(status==='all'||x.status===status)&&(type==='all'||(x.service_type||'collection')===type)&&(pev==='all'||String(x.pev_id)===pev));};
   const commercialComparison=(items)=>{if(!management||commercialValue()!=='all')return '';const groups=new Map();state.commercials.forEach(c=>groups.set(String(c.id),{name:c.name,pevs:state.pevs.filter(p=>String(p.commercial_owner_id||'')===String(c.id)).length,visits:0,collections:0,deliveries:0,completed:0,failed:0,weight:0}));items.forEach(x=>{if(!x.commercial_owner_id)return;const k=String(x.commercial_owner_id);if(!groups.has(k))groups.set(k,{name:x.commercial_owner_name||'Comercial',pevs:state.pevs.filter(p=>String(p.commercial_owner_id||'')===k).length,visits:0,collections:0,deliveries:0,completed:0,failed:0,weight:0});const g=groups.get(k);g.visits++;if((x.service_type||'collection')==='collection')g.collections++;else g.deliveries++;if(x.status==='completed')g.completed++;if(x.status==='failed')g.failed++;g.weight+=Number(x.collected_weight_kg||0);});const rows=[...groups.values()].filter(g=>g.pevs||g.visits).sort((a,b)=>a.name.localeCompare(b.name));if(!rows.length)return '<div class="card report-comparison"><h2>Comparativo por Comercial</h2><div class="empty">As PEVs existentes ainda não possuem Comercial responsável definido.</div></div>';return `<div class="card report-comparison"><div class="report-section-head"><div><span class="eyebrow">Gestão comercial</span><h2>Comparativo por Comercial</h2><p class="muted">Comparação das carteiras, considerando também a quantidade total de PEVs vinculadas a cada Comercial.</p></div></div><div class="table-wrap"><table><thead><tr><th>Comercial</th><th>PEVs</th><th>Visitas</th><th>Coletas</th><th>Entregas</th><th>Realizadas</th><th>Não realizadas</th><th>Taxa</th><th>Peso total</th><th>Média visitas / PEV</th></tr></thead><tbody>${rows.map(g=>{const rate=g.visits?Math.round(g.completed/g.visits*1000)/10:0,avg=g.pevs?Math.round(g.visits/g.pevs*100)/100:0;return `<tr><td><strong>${esc(g.name)}</strong></td><td>${g.pevs}</td><td>${g.visits}</td><td>${g.collections}</td><td>${g.deliveries}</td><td>${g.completed}</td><td>${g.failed}</td><td><strong>${String(rate).replace('.',',')}%</strong></td><td>${g.weight.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})} kg</td><td>${String(avg).replace('.',',')}</td></tr>`}).join('')}</tbody></table></div></div>`;};
   const draw=()=>{const items=filtered(),completed=items.filter(x=>x.status==='completed').length,failed=items.filter(x=>x.status==='failed').length,collections=items.filter(x=>(x.service_type||'collection')==='collection').length,deliveries=items.length-collections,totalWeight=items.reduce((a,x)=>a+Number(x.collected_weight_kg||0),0),rate=items.length?Math.round(completed/items.length*1000)/10:0,pev=$('#reportPev').value,selected=items[0];$('#collectionReportContent').innerHTML=`<div class="report-kpis"><div class="report-kpi"><span>Total de visitas</span><strong>${items.length}</strong></div><div class="report-kpi"><span>Coletas</span><strong>${collections}</strong></div><div class="report-kpi"><span>Entregas</span><strong>${deliveries}</strong></div><div class="report-kpi"><span>Realizadas</span><strong>${completed}</strong></div><div class="report-kpi danger"><span>Não realizadas</span><strong>${failed}</strong></div><div class="report-kpi"><span>Taxa de realização</span><strong>${String(rate).replace('.',',')}%</strong></div><div class="report-kpi"><span>Peso coletado</span><strong>${totalWeight.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})} kg</strong></div></div>${commercialComparison(items)}${pev!=='all'?`<div class="selected-pev-report"><div><span class="eyebrow">PEV selecionado</span><h2>${esc(selected?.pev_name||'PEV')}</h2><p>${esc(selected?.city||'')}/${esc(selected?.state||'')}${selected?.commercial_owner_name?` • Comercial: ${esc(selected.commercial_owner_name)}`:''}</p></div><div><span>Total de visitas</span><strong>${items.length}</strong></div><div><span>Total de coletas</span><strong>${collections}</strong></div><div><span>Total de entregas</span><strong>${deliveries}</strong></div><div><span>Peso coletado</span><strong>${totalWeight.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})} kg</strong></div><div><span>Última visita</span><strong>${items.length?fmtDate([...items].sort((a,b)=>String(b.route_date).localeCompare(String(a.route_date)))[0].route_date):'—'}</strong></div></div>`:''}<div class="card"><div class="table-wrap"><table><thead><tr><th>Data</th><th>Tipo</th><th>PEV / Local</th>${management?'<th>Comercial</th>':''}<th>Rota</th><th>Peso</th><th>Status</th><th>Observação</th></tr></thead><tbody>${items.length?items.map(x=>`<tr><td>${fmtDate(x.route_date)}</td><td><span class="badge ${x.service_type==='delivery'?'released':'finished'}">${esc(serviceTypeLabel[x.service_type||'collection'])}</span></td><td><strong>${esc(x.pev_name||'PEV')}</strong><br><span class="muted">${esc(x.city||'')}/${esc(x.state||'')}</span></td>${management?`<td>${esc(x.commercial_owner_name||'Não definido')}</td>`:''}<td>${esc(x.route_name||'Rota')}</td><td>${x.service_type==='collection'&&x.collected_weight_kg?Number(x.collected_weight_kg).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+' kg':'—'}</td><td><span class="badge ${x.status}">${x.status==='completed'?'Realizada':x.status==='failed'?'Não realizada':x.status==='arrived'?'No local':'Pendente'}</span></td><td>${esc(x.failure_reason||x.driver_note||'—')}</td></tr>`).join(''):`<tr><td colspan="${management?8:7}"><div class="empty">Nenhum registro encontrado para os filtros selecionados.</div></td></tr>`}</tbody></table></div></div>`;};
-  const pdf=()=>{const qs=new URLSearchParams({from:$('#reportFrom').value,to:$('#reportTo').value,status:$('#reportStatus').value,service_type:$('#reportServiceType').value,pev:$('#reportPev').value,commercial:commercialValue()});window.open(`/api/reports/collections/pdf?${qs.toString()}`,'_blank');};
-  const xlsx=()=>{const qs=new URLSearchParams({from:$('#reportFrom').value,to:$('#reportTo').value,status:$('#reportStatus').value,service_type:$('#reportServiceType').value,pev:$('#reportPev').value,commercial:commercialValue()});window.open(`/api/reports/collections/xlsx?${qs.toString()}`,'_blank');};
-  $('#loadCollectionsReport').onclick=load;['reportStatus','reportServiceType','reportPev'].forEach(id=>$('#'+id).onchange=draw);if($('#reportCommercial'))$('#reportCommercial').onchange=()=>{rebuildOptions();draw();};$('#exportCollectionsPdf').onclick=pdf;$('#exportCollectionsXlsx').onclick=xlsx;await load();
+  const exportReport=async(format,button)=>{const from=$('#reportFrom').value,to=$('#reportTo').value,qs=new URLSearchParams({from,to,status:$('#reportStatus').value,service_type:$('#reportServiceType').value,pev:$('#reportPev').value,commercial:commercialValue()});try{button.disabled=true;await downloadAuthenticated(`/api/reports/collections/${format}?${qs.toString()}`,`relatorio-coletas-entregas-${from}-a-${to}.${format}`);toast(format==='pdf'?'PDF exportado.':'Planilha Excel exportada.','success')}catch(e){toast(e.message,'error')}finally{button.disabled=false;}};
+  $('#loadCollectionsReport').onclick=load;['reportStatus','reportServiceType','reportPev'].forEach(id=>$('#'+id).onchange=draw);if($('#reportCommercial'))$('#reportCommercial').onchange=()=>{rebuildOptions();draw();};$('#exportCollectionsPdf').onclick=()=>exportReport('pdf',$('#exportCollectionsPdf'));$('#exportCollectionsXlsx').onclick=()=>exportReport('xlsx',$('#exportCollectionsXlsx'));await load();
 }
 
 async function renderSettings(){

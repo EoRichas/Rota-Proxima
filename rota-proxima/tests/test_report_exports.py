@@ -107,7 +107,9 @@ class ReportExportTests(unittest.TestCase):
     def test_interface_has_xlsx_and_no_csv_export(self):
         source = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
         self.assertIn('Exportar Excel (.xlsx)', source)
-        self.assertIn('/api/reports/collections/xlsx?', source)
+        self.assertIn("downloadAuthenticated(`/api/reports/collections/${format}?", source)
+        self.assertIn("headers:{'X-Rota-Device-ID':DEVICE_ID}", source)
+        self.assertNotIn("window.open(`/api/reports/collections/", source)
         self.assertNotIn('Exportar CSV', source)
         self.assertNotIn('.csv`', source)
 
