@@ -488,6 +488,7 @@ td { font-variant-numeric: tabular-nums; }
 .timeline-dot.bad { color: var(--danger); background: var(--danger-bg); border-color: #f1d5d3; }
 .warning, .info { padding: 11px 12px; border: 1px solid; border-radius: 7px; font-size: 12px; line-height: 1.5; }
 .warning { color: var(--warn); background: var(--warn-bg); border-color: #f1dfc1; }
+.page-load-error { display:flex; flex-direction:column; align-items:flex-start; gap:10px; padding:18px; }
 .info { color: #24557f; background: var(--blue-bg); border-color: #d5e4f1; }
 hr { margin: 19px 0; border: 0; border-top: 1px solid var(--line); }
 

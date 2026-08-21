@@ -213,7 +213,7 @@ class SharePointHandler(rota.AppHandler):
         if path == '/api/health':
             return self.send_json({
                 'ok': True,
-                'build': 'SHAREPOINT-PWA-DEVICE-SESSION-2026-08-21',
+                'build': 'SHAREPOINT-PWA-LOADING-RECOVERY-2026-08-21',
                 'listen': f'{rota.HOST}:{rota.PORT}',
                 'render': rota.IS_RENDER,
                 'external_url': os.environ.get('RENDER_EXTERNAL_URL', ''),
@@ -225,7 +225,7 @@ class SharePointHandler(rota.AppHandler):
 
 rota.upload_evidence = upload_evidence
 rota.AppHandler = SharePointHandler
-rota.BUILD_ID = 'SHAREPOINT-PWA-DEVICE-SESSION-2026-08-21'
+rota.BUILD_ID = 'SHAREPOINT-PWA-LOADING-RECOVERY-2026-08-21'
 
 
 if __name__ == '__main__':

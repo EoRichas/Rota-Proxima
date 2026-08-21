@@ -1,4 +1,4 @@
-const CACHE='rota-proxima-device-session-20260821-v2';
+const CACHE='rota-proxima-device-session-20260821-v3';
 const ASSETS=['/','/index.html','/styles.css','/workflow-patch.css','/dashboard-center.css','/ui-cleanup.css','/mobile-access.css','/app.js','/workflow-patch.js','/dashboard-center.js','/ui-cleanup.js','/mobile-access.js','/manifest.webmanifest','/icon.svg'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)))});
 self.addEventListener('activate',e=>e.waitUntil(Promise.all([self.clients.claim(),caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))])));
