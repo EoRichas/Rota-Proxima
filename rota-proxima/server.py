@@ -25,7 +25,7 @@ SUPABASE_UNAVAILABLE_MESSAGE='O serviço de dados está temporariamente indispon
 AUTH_REFRESH_UNAVAILABLE_MESSAGE='Não foi possível renovar sua sessão agora. Tente novamente em alguns instantes.'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
 SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
-BUILD_ID='REPORT-DOWNLOAD-AUTH-2026-08-21'
+BUILD_ID='PASSWORD-PRESENCE-2026-08-24'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -47,9 +47,39 @@ _NOMINATIM_LOCK=threading.Lock()
 _NOMINATIM_LAST=0.0
 _STATIC_ASSET_CACHE={}
 _STATIC_ASSET_CACHE_LOCK=threading.Lock()
+_USER_PRESENCE={}
+_USER_PRESENCE_LOCK=threading.Lock()
+_USER_PRESENCE_TTL=90
 
 
 def now_iso(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
+def mark_user_presence(user_id,device_id,now=None):
+    if not user_id or not device_id:return False
+    current=time.monotonic() if now is None else float(now)
+    with _USER_PRESENCE_LOCK:
+        devices=_USER_PRESENCE.setdefault(str(user_id),{})
+        expired=[key for key,expires_at in devices.items() if expires_at<=current]
+        for key in expired:devices.pop(key,None)
+        devices[str(device_id)]=current+_USER_PRESENCE_TTL
+    return True
+def clear_device_presence(device_id):
+    if not device_id:return False
+    removed=False
+    with _USER_PRESENCE_LOCK:
+        for user_id,devices in list(_USER_PRESENCE.items()):
+            if str(device_id) in devices:
+                devices.pop(str(device_id),None);removed=True
+            if not devices:_USER_PRESENCE.pop(user_id,None)
+    return removed
+def user_is_online(user_id,now=None):
+    if not user_id:return False
+    current=time.monotonic() if now is None else float(now)
+    with _USER_PRESENCE_LOCK:
+        devices=_USER_PRESENCE.get(str(user_id),{})
+        expired=[key for key,expires_at in devices.items() if expires_at<=current]
+        for key in expired:devices.pop(key,None)
+        if not devices:_USER_PRESENCE.pop(str(user_id),None)
+        return bool(devices)
 def stateless_post(url,**kwargs):
     """POST sem cookie jar compartilhado entre requisições de aparelhos distintos."""
     return requests.post(url,**kwargs)
@@ -930,6 +960,7 @@ class AppHandler(BaseHTTPRequestHandler):
         u=self.current_user()
         if not u:self.send_json({'error':'Não autenticado'},401);return None
         if roles and u.get('role') not in roles:self.send_json({'error':'Sem permissão'},403);return None
+        mark_user_presence(u.get('id'),self.request_device_id())
         return u
     def token(self):return getattr(self,'_access',None) or self.auth_tokens()[0]
     def do_GET(self):
@@ -954,13 +985,15 @@ class AppHandler(BaseHTTPRequestHandler):
                 return self.send_json(viacep_lookup(cep))
             u=self.require_user();
             if not u:return
+            if path=='/api/presence':return self.send_json({'ok':True,'online':True,'expires_in':_USER_PRESENCE_TTL})
             t=self.token();role=u['role'];q=self.query()
             if path=='/api/settings':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json(first(Supa.get('settings',t,{'id':'eq.1','select':'*'})))
             if path=='/api/users':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
-                rows=Supa.get('profiles',t,{'select':'*','order':'active.desc,name.asc'});return self.send_json({'items':rows})
+                rows=Supa.get('profiles',t,{'select':'*','order':'active.desc,name.asc'})
+                return self.send_json({'items':[{**row,'online':bool(row.get('active') and user_is_online(row.get('id')))} for row in rows]})
             if path=='/api/drivers':
                 if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json({'items':Supa.get('profiles',t,{'role':'eq.driver','active':'eq.true','select':'*','order':'name.asc'})})
@@ -1064,7 +1097,7 @@ class AppHandler(BaseHTTPRequestHandler):
         try:
             if path=='/api/setup' and method=='POST':return self.send_json(edge('setup',data),201)
             if path=='/api/login' and method=='POST':
-                d=edge('login',data);self.set_auth_headers(d['access_token'],d['refresh_token'],self.request_device_id());return self.send_json({'user':d['user']})
+                d=edge('login',data);device_id=self.request_device_id();self.set_auth_headers(d['access_token'],d['refresh_token'],device_id);mark_user_presence(d['user'].get('id'),device_id);return self.send_json({'user':d['user']})
             if path=='/api/logout' and method=='POST':
                 access,_=self.auth_tokens()
                 if access:
@@ -1072,12 +1105,14 @@ class AppHandler(BaseHTTPRequestHandler):
                     # usuário em todos os celulares. Local revoga só esta sessão.
                     try: stateless_post(f'{AUTH}/logout?scope=local',headers={'apikey':SUPABASE_KEY,'Authorization':f'Bearer {access}'},timeout=10)
                     except: pass
-                self.clear_auth_headers();return self.send_json({'ok':True})
+                clear_device_presence(self.request_device_id());self.clear_auth_headers();return self.send_json({'ok':True})
             u=self.require_user();
             if not u:return
             t=self.token();role=u['role']
             if path=='/api/change-password' and method=='POST':
-                edge('change-own-password',data,t);return self.send_json({'ok':True})
+                edge('change-own-password',data,t)
+                with _AUTH_CACHE_LOCK:_AUTH_CACHE.pop(t,None)
+                return self.send_json({'ok':True})
             if path=='/api/users' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 d=edge('create-user',data,t);return self.send_json(d,201)
