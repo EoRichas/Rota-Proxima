@@ -25,7 +25,7 @@ SUPABASE_UNAVAILABLE_MESSAGE='O serviço de dados está temporariamente indispon
 AUTH_REFRESH_UNAVAILABLE_MESSAGE='Não foi possível renovar sua sessão agora. Tente novamente em alguns instantes.'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
 SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
-BUILD_ID='PASSWORD-PRESENCE-2026-08-24'
+BUILD_ID='USER-ACTIVITY-MANAGER-PEV-2026-08-24'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -48,19 +48,22 @@ _NOMINATIM_LAST=0.0
 _STATIC_ASSET_CACHE={}
 _STATIC_ASSET_CACHE_LOCK=threading.Lock()
 _USER_PRESENCE={}
+_USER_LAST_ACTIVITY={}
 _USER_PRESENCE_LOCK=threading.Lock()
 _USER_PRESENCE_TTL=90
 
 
 def now_iso(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
-def mark_user_presence(user_id,device_id,now=None):
+def mark_user_presence(user_id,device_id,now=None,seen_at=None):
     if not user_id or not device_id:return False
     current=time.monotonic() if now is None else float(now)
+    activity=now_iso() if seen_at is None else str(seen_at)
     with _USER_PRESENCE_LOCK:
         devices=_USER_PRESENCE.setdefault(str(user_id),{})
         expired=[key for key,expires_at in devices.items() if expires_at<=current]
         for key in expired:devices.pop(key,None)
         devices[str(device_id)]=current+_USER_PRESENCE_TTL
+        _USER_LAST_ACTIVITY[str(user_id)]=activity
     return True
 def clear_device_presence(device_id):
     if not device_id:return False
@@ -80,6 +83,9 @@ def user_is_online(user_id,now=None):
         for key in expired:devices.pop(key,None)
         if not devices:_USER_PRESENCE.pop(str(user_id),None)
         return bool(devices)
+def user_last_activity(user_id):
+    if not user_id:return None
+    with _USER_PRESENCE_LOCK:return _USER_LAST_ACTIVITY.get(str(user_id))
 def stateless_post(url,**kwargs):
     """POST sem cookie jar compartilhado entre requisições de aparelhos distintos."""
     return requests.post(url,**kwargs)
@@ -993,7 +999,14 @@ class AppHandler(BaseHTTPRequestHandler):
             if path=='/api/users':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 rows=Supa.get('profiles',t,{'select':'*','order':'active.desc,name.asc'})
-                return self.send_json({'items':[{**row,'online':bool(row.get('active') and user_is_online(row.get('id')))} for row in rows]})
+                return self.send_json({'items':[
+                    {
+                        **row,
+                        'last_seen_at':user_last_activity(row.get('id')) or row.get('last_seen_at'),
+                        'online':bool(row.get('active') and user_is_online(row.get('id'))),
+                    }
+                    for row in rows
+                ]})
             if path=='/api/drivers':
                 if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json({'items':Supa.get('profiles',t,{'role':'eq.driver','active':'eq.true','select':'*','order':'name.asc'})})
@@ -1137,7 +1150,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                     result=Supa.rpc('delete_user_force',t,{'p_user_id':uid});return self.send_json(result or {'ok':True})
             if path=='/api/pevs' and method=='POST':
-                if role not in ('admin','commercial'):return self.send_json({'error':'Sem permissão'},403)
+                if role not in ('admin','commercial','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
                 if len(path.strip('/').split('/'))>3 and path.strip('/').split('/')[3]=='confirm-location' and method=='POST':
                     if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                     row=first(Supa.get('pevs',t,{'id':f'eq.{pid}','select':'id,lat,lng'}));
@@ -1145,13 +1158,29 @@ class AppHandler(BaseHTTPRequestHandler):
                     Supa.update('pevs',t,{'id':f'eq.{pid}'},{'location_confirmed':True});audit(t,u,'confirm_location','pev',pid,'Localização da PEV confirmada manualmente');return self.send_json({'ok':True})
                 pev_data=dict(data)
                 for temporary_field in ('service_start','service_end','notes','internal_notes'):pev_data.pop(temporary_field,None)
+                prepared_geo=None
+                if role=='commercial_manager' and not (pev_data.get('lat') and pev_data.get('lng')):
+                    try:
+                        prepared_geo=geocode_address_detailed(pev_data)
+                        pev_data.update({
+                            'lat':prepared_geo['lat'],
+                            'lng':prepared_geo['lng'],
+                            'location_confirmed':bool(prepared_geo.get('confirmed')),
+                        })
+                    except Exception as e:print('[PEV GEOCODE WARNING]',e)
                 print(f'[PEV SAVE] build={BUILD_ID} via rpc/save_pev')
                 row=Supa.rpc('save_pev',t,{'p_id':None,'p_data':pev_data})
                 new_id=row.get('id') if isinstance(row,dict) else None;geo=None
                 if new_id:
-                    try:
-                        saved=first(Supa.get('pevs',t,{'id':f'eq.{new_id}','select':'*'}));geo=geocode_pev_and_persist(t,saved) if saved else None
-                    except Exception as e: print('[PEV GEOCODE WARNING]',e)
+                    if role=='commercial_manager':
+                        if prepared_geo:
+                            geo={'id':new_id,**prepared_geo,'updated':True}
+                        elif pev_data.get('lat') and pev_data.get('lng'):
+                            geo={'id':new_id,'lat':float(pev_data['lat']),'lng':float(pev_data['lng']),'updated':False,'confirmed':True,'source':'existing'}
+                    else:
+                        try:
+                            saved=first(Supa.get('pevs',t,{'id':f'eq.{new_id}','select':'*'}));geo=geocode_pev_and_persist(t,saved) if saved else None
+                        except Exception as e: print('[PEV GEOCODE WARNING]',e)
                 return self.send_json({'id':new_id,'geocode':geo},201)
             if path=='/api/pevs/geocode-missing' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)

@@ -17,9 +17,11 @@ import server
 class UserPresenceTests(unittest.TestCase):
     def setUp(self):
         server._USER_PRESENCE.clear()
+        server._USER_LAST_ACTIVITY.clear()
 
     def tearDown(self):
         server._USER_PRESENCE.clear()
+        server._USER_LAST_ACTIVITY.clear()
 
     def test_user_turns_offline_when_heartbeat_expires(self):
         server.mark_user_presence('user-1', 'device-1', now=100)
@@ -35,6 +37,14 @@ class UserPresenceTests(unittest.TestCase):
         self.assertTrue(server.user_is_online('user-1', now=101))
         self.assertTrue(server.clear_device_presence('device-2'))
         self.assertFalse(server.user_is_online('user-1', now=101))
+
+    def test_last_activity_survives_logout_and_presence_expiration(self):
+        activity = '2026-08-24T12:53:00+00:00'
+        server.mark_user_presence('user-1', 'device-1', now=100, seen_at=activity)
+
+        self.assertTrue(server.clear_device_presence('device-1'))
+        self.assertFalse(server.user_is_online('user-1', now=101))
+        self.assertEqual(activity, server.user_last_activity('user-1'))
 
     def test_presence_endpoint_marks_the_authenticated_device(self):
         handler = server.AppHandler.__new__(server.AppHandler)
@@ -67,6 +77,26 @@ class UserPresenceTests(unittest.TestCase):
 
         self.assertEqual(200, status)
         self.assertEqual([True, False, False], [item['online'] for item in body['items']])
+
+    def test_active_session_replaces_stale_login_timestamp_in_user_list(self):
+        handler = server.AppHandler.__new__(server.AppHandler)
+        handler.require_user = lambda roles=None: {'id': 'admin-1', 'role': 'admin'}
+        handler.token = lambda: 'admin-token'
+        handler.query = lambda: {}
+        handler.send_json = lambda body, status=200, extra_headers=None: (status, body)
+        activity = '2026-08-24T12:53:00+00:00'
+        profiles = [
+            {'id': 'manager-1', 'active': True, 'last_seen_at': '2026-08-14T11:18:00+00:00'},
+            {'id': 'offline-1', 'active': True, 'last_seen_at': '2026-08-21T12:53:00+00:00'},
+        ]
+        server.mark_user_presence('manager-1', 'device-manager-1', seen_at=activity)
+
+        with patch.object(server.Supa, 'get', return_value=profiles):
+            status, body = handler.api_get('/api/users')
+
+        self.assertEqual(200, status)
+        self.assertEqual(activity, body['items'][0]['last_seen_at'])
+        self.assertEqual('2026-08-21T12:53:00+00:00', body['items'][1]['last_seen_at'])
 
 
 class PasswordChangeTests(unittest.TestCase):
