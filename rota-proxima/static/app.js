@@ -401,9 +401,9 @@ function bindRouteOpeners() {
 
 async function renderPevs() {
   state.pevs = (await api('/api/pevs')).items;
-  const canEdit = ['admin','commercial'].includes(state.user.role);
+  const canCreate = ['admin','commercial','commercial_manager'].includes(state.user.role);
   $('#page').innerHTML = `
-    <div class="page-head"><div><span class="eyebrow">Cadastros</span><h1>PEVs / Locais</h1><p class="muted">Dados permanentes de endereço, responsável e localização.</p></div>${canEdit?`<div class="page-head-actions"><button id="addPev" class="btn primary">+ Novo PEV</button>${state.user.role==='admin'?'<button id="geocodeMissingPevs" class="btn secondary">Atualizar coordenadas</button><button id="pevTrash" class="btn secondary">Lixeira</button>':''}</div>`:''}</div>
+    <div class="page-head"><div><span class="eyebrow">Cadastros</span><h1>PEVs / Locais</h1><p class="muted">Dados permanentes de endereço, responsável e localização.</p></div>${canCreate?`<div class="page-head-actions"><button id="addPev" class="btn primary">+ Novo PEV</button>${state.user.role==='admin'?'<button id="geocodeMissingPevs" class="btn secondary">Atualizar coordenadas</button><button id="pevTrash" class="btn secondary">Lixeira</button>':''}</div>`:''}</div>
     <div class="card"><div class="toolbar"><input id="pevSearch" class="search" placeholder="Pesquisar nome, bairro, cidade ou responsável"><select id="pevFilter"><option value="all">Todos</option><option value="favorite">Favoritos</option></select></div><div id="pevList"></div></div>`;
   if ($('#addPev')) $('#addPev').onclick = () => openPevModal();
   if ($('#geocodeMissingPevs')) $('#geocodeMissingPevs').onclick = async () => {
@@ -450,8 +450,9 @@ async function openPevTrash(){
 
 async function openPevModal(pev=null) {
   const p = pev || {address_mode:'cep',whatsapp:true,favorite:false};
-  if(state.user.role==='admin'){try{state.commercials=(await api('/api/commercials')).items||[];}catch(e){state.commercials=[];}}
-  const ownerField=state.user.role==='admin'?`<label class="field span-2"><span>Comercial responsável ${!pev&&state.commercials.length?'*':''}</span><select name="commercial_owner_id" ${!pev&&state.commercials.length?'required':''}><option value="">${state.commercials.length?'Selecione o Comercial':'Nenhum usuário Comercial cadastrado'}</option>${state.commercials.map(c=>`<option value="${esc(c.id)}" ${String(p.commercial_owner_id||'')===String(c.id)?'selected':''}>${esc(c.name)}</option>`).join('')}</select><small class="muted">Somente o Administrador pode alterar esta vinculação.${!state.commercials.length?' Cadastre primeiro um usuário com perfil Comercial.':''}</small></label>`:`<div class="span-2 info"><b>Comercial responsável:</b> ${esc(p.commercial_owner_name||state.user.name)}${pev?'':' • será vinculado automaticamente ao salvar'}</div>`;
+  const canAssignCommercial=['admin','commercial_manager'].includes(state.user.role);
+  if(canAssignCommercial){try{state.commercials=(await api('/api/commercials')).items||[];}catch(e){state.commercials=[];}}
+  const ownerField=canAssignCommercial?`<label class="field span-2"><span>Comercial responsável ${!pev&&state.commercials.length?'*':''}</span><select name="commercial_owner_id" ${!pev&&state.commercials.length?'required':''}><option value="">${state.commercials.length?'Selecione o Comercial':'Nenhum usuário Comercial cadastrado'}</option>${state.commercials.map(c=>`<option value="${esc(c.id)}" ${String(p.commercial_owner_id||'')===String(c.id)?'selected':''}>${esc(c.name)}</option>`).join('')}</select><small class="muted">O Administrador e o Gerente Comercial podem definir o responsável no cadastro.${!state.commercials.length?' Cadastre primeiro um usuário com perfil Comercial.':''}</small></label>`:`<div class="span-2 info"><b>Comercial responsável:</b> ${esc(p.commercial_owner_name||state.user.name)}${pev?'':' • será vinculado automaticamente ao salvar'}</div>`;
   modal(`<form id="pevForm" class="modal-box">
     <div class="modal-head"><div><span class="eyebrow">${pev?'Editar':'Novo'} cadastro</span><h2>${pev?'Editar PEV':'Cadastrar PEV'}</h2></div><button type="button" class="icon-btn modal-close">×</button></div>
     <div class="form-grid">
