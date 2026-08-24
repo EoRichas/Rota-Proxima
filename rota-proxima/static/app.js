@@ -15,6 +15,8 @@ const state = {
   plannerServiceTypes: {},
   plannerExactTimes: {},
   routeListTimer: null,
+  presenceTimer: null,
+  userListTimer: null,
 };
 
 const $ = (s, root=document) => root.querySelector(s);
@@ -169,6 +171,42 @@ function modal(html) {
   return dlg;
 }
 
+function openPasswordModal(required=false) {
+  const mandatory=!!required;
+  const close=mandatory?'': '<button type="button" class="icon-btn modal-close" aria-label="Fechar">×</button>';
+  const cancel=mandatory?'': '<button type="button" class="btn ghost modal-close">Cancelar</button>';
+  const dlg=modal(`<form id="passwordForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Segurança</span><h2>${mandatory?'Definir nova senha':'Alterar minha senha'}</h2><p class="muted">${mandatory?'Sua senha provisória precisa ser substituída para continuar.':'Informe a senha atual e escolha uma nova senha.'}</p></div>${close}</div><div class="form-grid"><label class="field span-2"><span>Senha atual</span><input name="current_password" type="password" autocomplete="current-password" required></label><label class="field"><span>Nova senha</span><input name="new_password" type="password" autocomplete="new-password" minlength="8" required></label><label class="field"><span>Confirmar nova senha</span><input name="confirm_password" type="password" autocomplete="new-password" minlength="8" required></label></div><div class="info" style="margin-top:14px">A nova senha deve ter pelo menos 8 caracteres.</div><div class="form-actions">${cancel}<button id="savePassword" class="btn primary">Salvar nova senha</button></div></form>`);
+  const preventCancel=event=>event.preventDefault();
+  if(mandatory)dlg.addEventListener('cancel',preventCancel);
+  $('#passwordForm').onsubmit=async event=>{
+    event.preventDefault();
+    const values=Object.fromEntries(new FormData(event.target));
+    if(values.new_password!==values.confirm_password)return toast('A confirmação da nova senha não confere.','error');
+    if(values.current_password===values.new_password)return toast('A nova senha precisa ser diferente da senha atual.','error');
+    const button=$('#savePassword');
+    try{
+      button.disabled=true;
+      await api('/api/change-password',{method:'POST',body:{current_password:values.current_password,new_password:values.new_password}});
+      state.user.must_change_password=false;
+      if(mandatory)dlg.removeEventListener('cancel',preventCancel);
+      dlg.close();toast('Senha alterada com sucesso.','success');
+      if(state.page==='users')await renderUsers();
+    }catch(error){button.disabled=false;toast(error.message,'error');}
+  };
+  return dlg;
+}
+
+function sendPresenceHeartbeat() {
+  if(!state.user||document.visibilityState==='hidden')return Promise.resolve();
+  return api('/api/presence',{timeoutMs:12000}).catch(()=>{});
+}
+
+function startPresenceHeartbeat() {
+  if(state.presenceTimer)clearInterval(state.presenceTimer);
+  sendPresenceHeartbeat();
+  state.presenceTimer=setInterval(sendPresenceHeartbeat,30000);
+}
+
 async function getPosition(required=false) {
   try {
     return await new Promise((resolve, reject) => {
@@ -244,6 +282,7 @@ $('#loginForm').addEventListener('submit', async e => {
 });
 
 $('#logoutBtn').onclick = async () => {
+  if(state.presenceTimer){clearInterval(state.presenceTimer);state.presenceTimer=null;}
   await api('/api/logout', {method:'POST'}).catch(()=>{});
   localValue(EXPECTED_USER_KEY, null);
   location.reload();
@@ -252,6 +291,7 @@ $('#menuBtn').onclick = () => $('#sidebar').classList.toggle('open');
 
 function enterApp(user) {
   state.user = user;
+  startPresenceHeartbeat();
   $('#authScreen').classList.add('hidden'); $('#appShell').classList.remove('hidden');
   $('#sidebarRole').textContent = roleLabel[user.role] || user.role;
   $('#currentUserCard').innerHTML = `<strong>${esc(user.name)}</strong><span>@${esc(user.username)}</span><button id="myPasswordBtn" class="btn ghost small" style="margin-top:8px">Minha senha</button>`;
@@ -276,6 +316,7 @@ function renderNav() {
 
 async function go(page) {
   if (state.routeListTimer) { clearInterval(state.routeListTimer); state.routeListTimer = null; }
+  if (state.userListTimer) { clearInterval(state.userListTimer); state.userListTimer = null; }
   state.page = page;
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.page === page));
   $('#page').innerHTML = `<div class="empty">Carregando...</div>`;
@@ -667,15 +708,17 @@ async function openRoute(id) {
 }
 
 async function renderUsers(){
+  if(state.userListTimer){clearInterval(state.userListTimer);state.userListTimer=null;}
   state.users=(await api('/api/users')).items;
   $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Administração</span><h1>Usuários</h1><p class="muted">Gerencie acessos sem apagar o histórico operacional.</p></div><button id="addUser" class="btn primary">+ Novo usuário</button></div>
   <div class="card"><div class="toolbar"><input id="userSearch" class="search" placeholder="Pesquisar nome ou usuário"><select id="userRoleFilter"><option value="all">Todos os perfis</option><option value="admin">Administrador</option><option value="commercial">Comercial</option><option value="commercial_manager">Gerente Comercial</option><option value="driver">Motorista</option><option value="production">Produção</option></select></div><div id="userList"></div></div>`;
   $('#addUser').onclick=openUserModal; $('#userSearch').oninput=drawUsers; $('#userRoleFilter').onchange=drawUsers; drawUsers();
+  state.userListTimer=setInterval(async()=>{if(state.page!=='users')return;try{apiCache.delete('/api/users');state.users=(await api('/api/users',{timeoutMs:12000})).items||[];if(state.page==='users')drawUsers();}catch(_){}},20000);
 }
 function drawUsers(){
   const q=($('#userSearch')?.value||'').toLowerCase(),rf=$('#userRoleFilter')?.value||'all';
   const items=state.users.filter(u=>(rf==='all'||u.role===rf)&&`${u.name} ${u.username}`.toLowerCase().includes(q));
-  $('#userList').innerHTML=items.length?`<div class="list">${items.map(u=>`<div class="list-item"><div class="list-item-main"><strong>${esc(u.name)}</strong><span>@${esc(u.username)} • ${roleLabel[u.role]||u.role}${u.phone?` • ${esc(u.phone)}`:''}</span><span>Último acesso: ${u.last_seen_at?fmtDateTime(u.last_seen_at):'Nunca'}${u.must_change_password?' • troca de senha pendente':''}</span></div><div class="actions"><span class="badge ${u.active?'normal':'cancelled'}">${u.active?'Ativo':'Inativo'}</span><button class="btn ghost small edit-user" data-id="${u.id}">Editar</button><button class="btn secondary small reset-user" data-id="${u.id}">Redefinir senha</button>${u.id!==state.user.id?`<button class="btn ${u.active?'danger':'success'} small toggle-user" data-id="${u.id}" data-active="${u.active?'1':'0'}">${u.active?'Desativar':'Reativar'}</button><button class="btn danger small delete-user" data-id="${u.id}">Excluir</button>`:''}</div></div>`).join('')}</div>`:'<div class="empty">Nenhum usuário encontrado.</div>';
+  $('#userList').innerHTML=items.length?`<div class="list">${items.map(u=>`<div class="list-item"><div class="list-item-main"><strong class="user-name-line"><span class="presence-dot ${u.online?'online':'offline'}" role="img" aria-label="${u.online?'Online':'Offline'}" title="${u.online?'Online agora':'Offline'}"></span>${esc(u.name)}</strong><span>@${esc(u.username)} • ${roleLabel[u.role]||u.role}${u.phone?` • ${esc(u.phone)}`:''}</span><span>Último acesso: ${u.last_seen_at?fmtDateTime(u.last_seen_at):'Nunca'}${u.must_change_password?' • troca de senha pendente':''}</span></div><div class="actions"><span class="badge ${u.active?'normal':'cancelled'}">${u.active?'Ativo':'Inativo'}</span><button class="btn ghost small edit-user" data-id="${u.id}">Editar</button><button class="btn secondary small reset-user" data-id="${u.id}">Redefinir senha</button>${u.id!==state.user.id?`<button class="btn ${u.active?'danger':'success'} small toggle-user" data-id="${u.id}" data-active="${u.active?'1':'0'}">${u.active?'Desativar':'Reativar'}</button><button class="btn danger small delete-user" data-id="${u.id}">Excluir</button>`:''}</div></div>`).join('')}</div>`:'<div class="empty">Nenhum usuário encontrado.</div>';
   $$('.edit-user').forEach(b=>b.onclick=()=>openEditUser(state.users.find(x=>x.id===b.dataset.id)));
   $$('.reset-user').forEach(b=>b.onclick=()=>resetUserPassword(b.dataset.id));
   $$('.toggle-user').forEach(b=>b.onclick=async()=>{const active=b.dataset.active==='1';if(!confirm(`${active?'Desativar':'Reativar'} este usuário?`))return;try{await api(`/api/users/${b.dataset.id}`,{method:'PUT',body:{active:!active}});toast(active?'Usuário desativado.':'Usuário reativado.','success');renderUsers();}catch(e){toast(e.message,'error')}});
@@ -830,5 +873,6 @@ async function openRoute(id){
   }catch(e){toast(e.message,'error')}
 }
 
+window.addEventListener('focus',()=>{if(state.user)sendPresenceHeartbeat();});
 if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/service-worker.js').catch(()=>{}));
 boot();

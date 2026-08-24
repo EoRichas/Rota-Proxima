@@ -410,6 +410,13 @@ td { font-variant-numeric: tabular-nums; }
 .list-item-main { min-width: 0; }
 .list-item-main strong { display: block; color: var(--text-strong); font-size: 13px; }
 .list-item-main span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.list-item-main .user-name-line { display: inline-flex; align-items: center; gap: 9px; }
+.list-item-main .user-name-line .presence-dot {
+  width: 10px; height: 10px; flex: 0 0 10px; display: inline-block; margin: 0;
+  border-radius: 50%; background: #80848e; box-shadow: 0 0 0 2px rgba(128,132,142,.12);
+}
+.list-item-main .user-name-line .presence-dot.online { background: #23a55a; box-shadow: 0 0 0 2px rgba(35,165,90,.16); }
+.list-item-main .user-name-line .presence-dot.offline { background: #80848e; }
 .actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .favorite { color: #9a5b18; }
 
