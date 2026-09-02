@@ -566,6 +566,28 @@ function openRequestModal(pev=null){
 
 function priorityOptions(selected='normal') { return Object.entries(priorityLabel).map(([v,l])=>`<option value="${v}" ${selected===v?'selected':''}>${l}</option>`).join(''); }
 
+function normalizeServiceType(value) {
+  return String(value||'').trim().toLowerCase()==='delivery'?'delivery':'collection';
+}
+
+function plannerStopPevId(stop) {
+  return Number((stop?.pev||stop)?.id??stop?.pev_id??0);
+}
+
+function setPlannerServiceType(pevId,value) {
+  const id=Number(pevId);
+  const serviceType=normalizeServiceType(value);
+  state.plannerServiceTypes[id]=serviceType;
+  const previewStop=state.routePreview?.stops?.find(stop=>plannerStopPevId(stop)===id);
+  if(previewStop)previewStop.service_type=serviceType;
+  return serviceType;
+}
+
+function plannerServiceTypeForStop(stop) {
+  const id=plannerStopPevId(stop);
+  return normalizeServiceType(state.plannerServiceTypes?.[id]??stop?.service_type);
+}
+
 async function renderPlanner() {
   if(state.user.role!=='admin') return go(state.user.role==='commercial_manager'?'dashboard':'requests');
   await Promise.all([api('/api/pevs').then(x=>state.pevs=x.items), api('/api/drivers').then(x=>state.drivers=x.items)]);
@@ -619,7 +641,7 @@ async function renderPlanner() {
       updateSelectedCount();
     });
     $$('.pev-priority').forEach(x=>x.onchange=()=>{state.plannerPriorities[Number(x.dataset.id)]=x.value;});
-    $$('.pev-service-type').forEach(x=>x.onchange=()=>{state.plannerServiceTypes[Number(x.dataset.id)]=x.value;});
+    $$('.pev-service-type').forEach(x=>x.onchange=()=>{setPlannerServiceType(x.dataset.id,x.value);if(state.routePreview)drawRoutePreview();});
     $$('.pev-exact-time').forEach(x=>x.onchange=()=>{state.plannerExactTimes[Number(x.dataset.id)]=x.value;});
     updateSelectedCount();
   }
@@ -640,7 +662,7 @@ async function optimizePlanner(mode) {
   });
   $('#routePreview').innerHTML='<div class="empty">Calculando sequência...</div>';
   try {
-    const data=await api('/api/optimize',{method:'POST',body:{pev_ids:selected,mode,start_time:localHHMM(),stops:selected.map(id=>{const rq=(state.requestSelection||[]).find(r=>r.pev_id===id);return {pev_id:id,request_id:rq?.id||null,priority:priorities[id]||'normal',service_type:state.plannerServiceTypes?.[id]||'collection',window_start:rq?.window_start||'',window_end:rq?.window_end||'',exact_time:state.plannerExactTimes?.[id]||rq?.exact_time||''};})}});
+    const data=await api('/api/optimize',{method:'POST',body:{pev_ids:selected,mode,start_time:localHHMM(),stops:selected.map(id=>{const rq=(state.requestSelection||[]).find(r=>r.pev_id===id);return {pev_id:id,request_id:rq?.id||null,priority:priorities[id]||'normal',service_type:normalizeServiceType(state.plannerServiceTypes?.[id]),window_start:rq?.window_start||'',window_end:rq?.window_end||'',exact_time:state.plannerExactTimes?.[id]||rq?.exact_time||''};})}});
     state.routePreview=data; drawRoutePreview();
   } catch(e){$('#routePreview').innerHTML=`<div class="warning">${esc(e.message)}</div>`;}
 }
@@ -659,7 +681,7 @@ async function saveDraft(){
   const driver_id=$('#routeDriver').value; if(!driver_id)return toast('Selecione o motorista.','error');
   const d=state.routePreview;
   const reqs=state.requestSelection||[]; const reqByPev=Object.fromEntries(reqs.map(r=>[r.pev_id,r]));
-  const body={name:$('#routeName').value,route_date:$('#routeDate').value,driver_id,total_distance_m:d.total_distance_m,total_duration_s:d.total_duration_s,request_ids:reqs.map(r=>r.id),stops:d.stops.map(s=>{const p=s.pev||s;const rq=reqByPev[p.id];return {pev_id:p.id,request_id:rq?.id||s.request_id||null,priority:s.priority,service_type:s.service_type||state.plannerServiceTypes?.[p.id]||'collection',distance_m:s.distance_m,duration_s:s.duration_s,window_start:rq?.window_start||'',window_end:rq?.window_end||'',exact_time:s.exact_time||state.plannerExactTimes?.[p.id]||rq?.exact_time||''};})};
+  const body={name:$('#routeName').value,route_date:$('#routeDate').value,driver_id,total_distance_m:d.total_distance_m,total_duration_s:d.total_duration_s,request_ids:reqs.map(r=>r.id),stops:d.stops.map(s=>{const p=s.pev||s;const rq=reqByPev[p.id];return {pev_id:p.id,request_id:rq?.id||s.request_id||null,priority:s.priority,service_type:plannerServiceTypeForStop(s),distance_m:s.distance_m,duration_s:s.duration_s,window_start:rq?.window_start||'',window_end:rq?.window_end||'',exact_time:s.exact_time||state.plannerExactTimes?.[p.id]||rq?.exact_time||''};})};
   try { const route=await api('/api/routes',{method:'POST',body}); state.requestSelection=[]; toast('Rota salva como rascunho. Solicitações vinculadas à rota.','success'); openRoute(route.id); } catch(e){toast(e.message,'error');}
 }
 
@@ -807,7 +829,7 @@ function hasStopEvidence(route,stop,evidenceType){
 }
 function pendingWeighingStops(route){
   const weighed=new Set((route.weighings||[]).map(w=>Number(w.stop_id)));
-  return (route.stops||[]).filter(s=>s.status==='completed'&&(s.service_type||'collection')==='collection'&&!weighed.has(Number(s.id)));
+  return (route.stops||[]).filter(s=>s.status==='completed'&&s.service_type==='collection'&&!weighed.has(Number(s.id)));
 }
 function driverProductionWaitingHtml(route){
   const pending=pendingWeighingStops(route);

@@ -62,7 +62,7 @@ class SessionIsolationTests(unittest.TestCase):
         worker = (ROOT / 'static' / 'service-worker.js').read_text(encoding='utf-8')
         self.assertIn("'X-Rota-Device-ID':DEVICE_ID", source)
         self.assertIn('expectedUser !== String(me.user.id)', source)
-        self.assertIn('rota-proxima-manager-activity-20260824-v1', worker)
+        self.assertIn('rota-proxima-service-type-integrity-20260902-v1', worker)
 
     def test_two_logins_keep_independent_cookie_pairs(self):
         production = handler_for({'username': 'producao', 'password': 'senha-producao'})

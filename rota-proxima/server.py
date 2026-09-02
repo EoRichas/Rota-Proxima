@@ -25,7 +25,8 @@ SUPABASE_UNAVAILABLE_MESSAGE='O serviço de dados está temporariamente indispon
 AUTH_REFRESH_UNAVAILABLE_MESSAGE='Não foi possível renovar sua sessão agora. Tente novamente em alguns instantes.'
 PRIORITY_FACTOR={'urgent':.55,'high':.78,'normal':1.0,'low':1.18}
 SERVICE_TYPE_LABEL={'collection':'Coleta','delivery':'Entrega'}
-BUILD_ID='USER-ACTIVITY-MANAGER-PEV-2026-08-24'
+VALID_SERVICE_TYPES=frozenset(SERVICE_TYPE_LABEL)
+BUILD_ID='SERVICE-TYPE-INTEGRITY-2026-09-02'
 
 HTTP=requests.Session()
 HTTP.mount('https://', HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
@@ -94,6 +95,10 @@ def hms(v): return str(v or '')[:5]
 def num(v):
     try: return float(v) if v not in ('',None) else None
     except: return None
+def validated_service_type(value,default='collection'):
+    service_type=str(value or default).strip().lower()
+    if service_type not in VALID_SERVICE_TYPES:raise ValueError('Tipo de atendimento inválido')
+    return service_type
 
 def fetch_json(url,timeout=15,headers=None):
     # Reaproveita conexões TCP/TLS para serviços externos (CEP, mapa e OSRM).
@@ -649,7 +654,7 @@ def pending_production_weighings(route):
     return [
         stop for stop in route.get('stops',[])
         if stop.get('status')=='completed'
-        and stop.get('service_type','collection')=='collection'
+        and stop.get('service_type')=='collection'
         and int(stop.get('id')) not in weighed
     ]
 
@@ -661,14 +666,18 @@ def route_waiting_for_production(route):
 def production_weighing_items(token):
     rows=Supa.get('route_stops',token,{
         'status':'eq.completed','service_type':'eq.collection',
-        'select':'id,route_id,pev_id,sequence,completed_at,pevs(name,street,number,district,city,state),routes!inner(id,name,route_date,status)',
+        'select':'id,route_id,pev_id,sequence,completed_at,service_type,pevs(name,street,number,district,city,state),routes!inner(id,name,route_date,status)',
         'order':'route_id.asc,sequence.asc'
     }) or []
     items=[]
     for row in rows:
+        # Defesa adicional: mesmo que a consulta ou a policy seja alterada no
+        # futuro, uma Entrega nunca pode atravessar a fronteira da Produção.
+        if row.get('service_type')!='collection':continue
         route=row.pop('routes',{}) or {};pev=row.pop('pevs',{}) or {}
         items.append({
             'stop_id':row.get('id'),'route_id':row.get('route_id'),'pev_id':row.get('pev_id'),'sequence':row.get('sequence'),'completed_at':row.get('completed_at'),
+            'service_type':row.get('service_type'),
             'route_name':route.get('name') or f'Rota {row.get("route_id")}','route_date':route.get('route_date'),
             'pev_name':pev.get('name') or f'PEV {row.get("pev_id")}','street':pev.get('street') or '','number':pev.get('number') or '',
             'district':pev.get('district') or '','city':pev.get('city') or '','state':pev.get('state') or ''
@@ -1243,7 +1252,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 dist,dur,source=osrm_matrix(points);meta={int(x['pev_id']):x for x in data.get('stops') or []};legacy_pri=data.get('priorities') or {};pri={i+1:meta.get(p['id'],{}).get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal') for i,p in enumerate(items)};exact={i+1:meta.get(p['id'],{}).get('exact_time') for i,p in enumerate(items) if meta.get(p['id'],{}).get('exact_time')}
                 order,warnings=optimize_order_with_exact_times(dist,dur,pri,exact,hhmm_to_minutes(data.get('start_time')),data.get('mode','best'));prev=0;totald=totalt=0;st=[]
                 for seq,idx in enumerate(order,1):
-                    p=items[idx-1];m=meta.get(p['id'],{});d=dist[prev][idx] or 0;du=dur[prev][idx] or 0;totald+=d;totalt+=du;prev=idx;st.append({**p,'pev':p,'pev_id':p['id'],'sequence':seq,'priority':m.get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal'),'service_type':m.get('service_type') or 'collection','window_start':m.get('window_start') or '','window_end':m.get('window_end') or '','exact_time':m.get('exact_time') or '','request_id':m.get('request_id'),'distance_m':d,'duration_s':du})
+                    p=items[idx-1];m=meta.get(p['id'],{});d=dist[prev][idx] or 0;du=dur[prev][idx] or 0;totald+=d;totalt+=du;prev=idx;st.append({**p,'pev':p,'pev_id':p['id'],'sequence':seq,'priority':m.get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal'),'service_type':validated_service_type(m.get('service_type')),'window_start':m.get('window_start') or '','window_end':m.get('window_end') or '','exact_time':m.get('exact_time') or '','request_id':m.get('request_id'),'distance_m':d,'duration_s':du})
                 return self.send_json({'origin':origin,'stops':st,'total_distance_m':totald,'total_duration_s':totalt,'source':source,'schedule_warnings':warnings})
             if path=='/api/routes' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
@@ -1254,7 +1263,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 for i,st in enumerate(data.get('stops') or [],1):
                     stops.append({
                         'pev_id':int(st['pev_id']),'request_id':st.get('request_id') or None,'sequence':i,
-                        'priority':st.get('priority','normal'),'service_type':st.get('service_type') or 'collection','window_start':st.get('window_start') or None,
+                        'priority':st.get('priority','normal'),'service_type':validated_service_type(st.get('service_type')),'window_start':st.get('window_start') or None,
                         'window_end':st.get('window_end') or None,'exact_time':st.get('exact_time') or None,
                         'distance_m':st.get('distance_m') or 0,'duration_s':st.get('duration_s') or 0
                     })
