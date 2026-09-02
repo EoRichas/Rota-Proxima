@@ -805,6 +805,11 @@ def reorder_route_for_exact_times(token,route_id,start_lat=None,start_lng=None,l
 class AppHandler(BaseHTTPRequestHandler):
     server_version='RotaProxima/3.0'
     protocol_version='HTTP/1.1'
+    def handle_one_request(self):
+        # O proxy do Render reaproveita conexões HTTP/1.1. Cabeçalhos de login,
+        # refresh ou logout pertencem somente à requisição que os criou.
+        self.pending_headers=[]
+        return super().handle_one_request()
     def route_path(self):return urllib.parse.urlparse(self.path).path
     def query(self):return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
     def read_json(self):
@@ -827,6 +832,11 @@ class AppHandler(BaseHTTPRequestHandler):
         path=urllib.parse.urlparse(getattr(self,'path','?')).path or '?'
         print(f'[CLIENT DISCONNECTED] {method} {path}: {type(exc).__name__}')
     def _send_payload(self,raw,content_type,status=200,cache_control='no-store',extra_headers=None):
+        # Consome os cabeçalhos uma única vez, antes de escrever a resposta. Isso
+        # também evita que uma desconexão do cliente os carregue para o próximo uso
+        # da mesma conexão persistente pelo proxy.
+        pending_headers=tuple(getattr(self,'pending_headers',[]) or [])
+        self.pending_headers=[]
         try:
             headers=dict(extra_headers or {})
             compressible=(content_type.startswith('text/') or content_type.startswith('application/json') or content_type.startswith('application/javascript') or content_type.startswith('image/svg+xml'))
@@ -841,7 +851,7 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Length',str(len(raw)))
             self.send_header('Cache-Control',cache_control)
             self.common_security_headers()
-            for k,v in (getattr(self,'pending_headers',[]) or []):self.send_header(k,v)
+            for k,v in pending_headers:self.send_header(k,v)
             for k,v in headers.items():self.send_header(k,v)
             self.end_headers()
             self.wfile.write(raw)

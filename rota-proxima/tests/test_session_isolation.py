@@ -1,4 +1,6 @@
+import http.client
 import sys
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -23,6 +25,45 @@ def handler_for(body=None):
 
 
 class SessionIsolationTests(unittest.TestCase):
+    def test_auth_cookies_do_not_leak_to_the_next_keep_alive_request(self):
+        class KeepAliveProbeHandler(server.AppHandler):
+            def api_get(self, path):
+                if path == '/api/session-response':
+                    self.pending_headers = [('Set-Cookie', 'rota_access=first-session; Path=/')]
+                    return self.send_json({'ok': True})
+                if path == '/api/health':
+                    return self.send_json({'ok': True})
+                return self.send_json({'error': 'Não encontrado'}, 404)
+
+            def log_message(self, *_args):
+                return None
+
+        httpd = server.RotaHTTPServer(('127.0.0.1', 0), KeepAliveProbeHandler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        connection = http.client.HTTPConnection('127.0.0.1', httpd.server_port, timeout=3)
+        try:
+            connection.request('GET', '/api/session-response')
+            first = connection.getresponse()
+            first.read()
+            self.assertEqual(
+                ['rota_access=first-session; Path=/'],
+                [value for name, value in first.getheaders() if name.lower() == 'set-cookie'],
+            )
+
+            connection.request('GET', '/api/health')
+            second = connection.getresponse()
+            second.read()
+            self.assertEqual(
+                [],
+                [value for name, value in second.getheaders() if name.lower() == 'set-cookie'],
+            )
+        finally:
+            connection.close()
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=3)
+
     def test_login_binds_auth_cookies_to_the_requesting_device(self):
         handler = handler_for({'username': 'producao', 'password': 'senha-producao'})
         handler.headers = {'X-Rota-Device-ID': 'device-production-0001'}
@@ -92,6 +133,33 @@ class SessionIsolationTests(unittest.TestCase):
         self.assertIn('access-driver', driver_cookies)
         self.assertIn('refresh-driver', driver_cookies)
         self.assertNotIn('production', driver_cookies)
+
+    def test_six_simultaneous_devices_keep_their_own_users_and_tokens(self):
+        handlers = []
+        responses = []
+        for index in range(6):
+            handler = handler_for({'username': f'user-{index}', 'password': 'valid-password'})
+            handler.headers = {'X-Rota-Device-ID': f'device-session-{index:04d}'}
+            handlers.append(handler)
+            responses.append({
+                'access_token': f'access-session-{index}',
+                'refresh_token': f'refresh-session-{index}',
+                'user': {'id': f'user-id-{index}', 'role': 'production' if index else 'admin'},
+            })
+
+        with patch.object(server, 'edge', side_effect=responses):
+            for handler in handlers:
+                handler.api_write('POST', '/api/login')
+
+        for index, handler in enumerate(handlers):
+            cookies = '\n'.join(value for name, value in handler.pending_headers if name == 'Set-Cookie')
+            self.assertIn(f'access-session-{index}', cookies)
+            self.assertIn(f'refresh-session-{index}', cookies)
+            self.assertIn(f'rota_device=device-session-{index:04d}', cookies)
+            for other in range(6):
+                if other != index:
+                    self.assertNotIn(f'access-session-{other}', cookies)
+                    self.assertNotIn(f'refresh-session-{other}', cookies)
 
     def test_logout_revokes_only_the_current_supabase_session(self):
         handler = handler_for()
