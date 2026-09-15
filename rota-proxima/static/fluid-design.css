@@ -1,0 +1,268 @@
+/* Design Web Fluido — refinamento visual incremental do Rota Próxima.
+   Mantém identidade, estrutura e componentes existentes; melhora ritmo, hierarquia,
+   responsividade, legibilidade, estados interativos e consistência entre telas. */
+
+:root {
+  --rp-content-max: 1480px;
+  --rp-space-1: clamp(6px, .35vw, 8px);
+  --rp-space-2: clamp(10px, .55vw, 12px);
+  --rp-space-3: clamp(14px, .8vw, 18px);
+  --rp-space-4: clamp(18px, 1.15vw, 24px);
+  --rp-space-5: clamp(24px, 1.7vw, 34px);
+  --rp-radius-sm: 10px;
+  --rp-radius-md: 14px;
+  --rp-radius-lg: 18px;
+  --rp-shadow-soft: 0 8px 28px rgba(23, 63, 47, .07);
+  --rp-shadow-hover: 0 14px 36px rgba(23, 63, 47, .11);
+  --rp-focus: 0 0 0 3px rgba(23, 122, 82, .16);
+  --rp-ease: cubic-bezier(.2,.8,.2,1);
+}
+
+.main-area { min-width: 0; }
+
+.page {
+  width: min(100%, var(--rp-content-max));
+  margin-inline: auto;
+  padding: clamp(18px, 2.2vw, 34px);
+}
+
+.page-head {
+  gap: var(--rp-space-4);
+  margin-bottom: var(--rp-space-4);
+  align-items: flex-start;
+}
+
+.page-head > div:first-child { min-width: 0; max-width: 840px; }
+
+.page-head h1 {
+  margin-top: 3px;
+  margin-bottom: 7px;
+  font-size: clamp(1.65rem, 1.9vw, 2.15rem);
+  line-height: 1.12;
+  letter-spacing: -.025em;
+}
+
+.page-head h2,
+.modal-head h2,
+.card h2 { line-height: 1.18; letter-spacing: -.018em; }
+
+.page-head .muted,
+.modal-head .muted { line-height: 1.55; }
+
+.page-head-actions,
+.form-actions,
+.actions { gap: var(--rp-space-2); flex-wrap: wrap; }
+
+.card,
+.list-item,
+.summary-box,
+.report-kpi,
+.contact-box,
+.production-route-card,
+.route-monitor-card { border-radius: var(--rp-radius-lg); }
+
+.card { box-shadow: var(--rp-shadow-soft); }
+.grid { gap: var(--rp-space-3); }
+.grid.stats { grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); }
+
+.stat-card {
+  min-height: 118px;
+  padding: clamp(18px, 1.6vw, 24px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stat-card > span { line-height: 1.35; }
+.stat-card > strong {
+  font-size: clamp(1.7rem, 2.1vw, 2.35rem);
+  line-height: 1;
+  letter-spacing: -.03em;
+}
+
+.toolbar { gap: var(--rp-space-2); align-items: center; flex-wrap: wrap; }
+.toolbar .search,
+.toolbar > input[type="search"],
+.toolbar > input:not([type]) { flex: 1 1 280px; min-width: min(280px, 100%); }
+
+.field { gap: 7px; }
+.field > span,
+.field-label { font-size: .84rem; font-weight: 700; letter-spacing: .005em; }
+
+input,
+select,
+textarea {
+  min-height: 44px;
+  border-radius: 12px;
+  transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+}
+
+textarea { min-height: 104px; resize: vertical; }
+input:focus,
+select:focus,
+textarea:focus { outline: none; box-shadow: var(--rp-focus); }
+
+.input-action { gap: 8px; align-items: stretch; }
+.input-action > input { min-width: 0; }
+
+.btn {
+  min-height: 42px;
+  border-radius: 12px;
+  padding-inline: 16px;
+  font-weight: 700;
+  letter-spacing: -.005em;
+  transition: transform .16s var(--rp-ease), box-shadow .18s ease, background .18s ease, border-color .18s ease, color .18s ease;
+}
+
+.btn.small { min-height: 34px; border-radius: 10px; padding-inline: 12px; }
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.nav button:focus-visible,
+.sidebar-collapse-toggle:focus-visible {
+  outline: 2px solid var(--rp-green, #177a52);
+  outline-offset: 3px;
+}
+
+.btn.primary,
+.btn.success { box-shadow: 0 6px 18px rgba(23, 122, 82, .13); }
+.btn:disabled { transform: none !important; box-shadow: none !important; }
+
+.list { gap: 10px; }
+.list-item {
+  gap: var(--rp-space-3);
+  padding: clamp(15px, 1.2vw, 19px);
+  transition: transform .16s var(--rp-ease), box-shadow .18s ease, border-color .18s ease, background .18s ease;
+}
+
+.list-item-main { min-width: 0; gap: 5px; }
+.list-item-main strong { line-height: 1.25; }
+.list-item-main span { line-height: 1.45; }
+
+.badge {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.route-builder {
+  grid-template-columns: minmax(0, 1.2fr) minmax(340px, .8fr);
+  gap: var(--rp-space-4);
+  align-items: start;
+}
+
+.sticky-card { top: clamp(16px, 2vw, 28px); }
+.pev-selector { gap: 10px; }
+.pev-check { border-radius: var(--rp-radius-md); padding: clamp(12px, 1vw, 15px); gap: 12px; }
+.planner-control { min-width: 116px; }
+
+.summary-strip { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.summary-box { min-width: 0; padding: 15px 16px; }
+.route-preview { gap: 10px; }
+.route-stop { border-radius: var(--rp-radius-md); padding: clamp(12px, 1vw, 16px); }
+.stop-number { flex: 0 0 34px; width: 34px; height: 34px; }
+
+.modal { padding: clamp(10px, 2vw, 24px); }
+.modal::backdrop { background: rgba(8, 18, 13, .56); backdrop-filter: blur(3px); }
+.modal-box {
+  width: min(900px, calc(100vw - 24px));
+  max-height: min(90vh, 920px);
+  overflow: auto;
+  border-radius: clamp(16px, 1.6vw, 22px);
+  box-shadow: 0 26px 70px rgba(7, 30, 20, .22);
+}
+.modal-head { gap: var(--rp-space-3); }
+.form-grid { gap: var(--rp-space-3); }
+
+.auth-screen { padding: clamp(20px, 4vw, 48px); }
+.auth-card {
+  width: min(100%, 480px);
+  border-radius: 24px;
+  box-shadow: 0 26px 80px rgba(8, 39, 26, .14);
+}
+.auth-brand { gap: 14px; }
+.auth-brand h1 { letter-spacing: -.025em; }
+
+.sidebar { gap: 14px; }
+.sidebar-brand { min-height: 48px; }
+.nav { gap: 5px; }
+.nav button { border-radius: 11px; }
+.user-card { border-radius: 15px; }
+
+@media (hover: hover) and (pointer: fine) {
+  .card:hover { box-shadow: var(--rp-shadow-hover); }
+  .list-item:hover { transform: translateY(-1px); box-shadow: 0 9px 24px rgba(23, 63, 47, .08); }
+  .btn:not(:disabled):hover { transform: translateY(-1px); }
+  .btn:not(:disabled):active { transform: translateY(0) scale(.985); }
+}
+
+html[data-theme="dark"] {
+  --rp-shadow-soft: 0 10px 30px rgba(0, 0, 0, .18);
+  --rp-shadow-hover: 0 16px 38px rgba(0, 0, 0, .24);
+  --rp-focus: 0 0 0 3px rgba(77, 155, 120, .18);
+}
+html[data-theme="dark"] .modal::backdrop { background: rgba(0, 0, 0, .68); }
+html[data-theme="dark"] .card,
+html[data-theme="dark"] .list-item,
+html[data-theme="dark"] .summary-box,
+html[data-theme="dark"] .pev-check,
+html[data-theme="dark"] .route-stop { box-shadow: var(--rp-shadow-soft); }
+
+@media (max-width: 1120px) {
+  .route-builder { grid-template-columns: 1fr; }
+  .sticky-card { position: static; }
+  .page-head { flex-wrap: wrap; }
+  .page-head-actions { width: 100%; }
+}
+
+@media (max-width: 760px) {
+  .page { padding: 16px 12px 26px; }
+  .page-head { margin-bottom: 16px; gap: 14px; }
+  .page-head h1 { font-size: clamp(1.45rem, 7vw, 1.8rem); }
+  .page-head-actions,
+  .form-actions { width: 100%; }
+  .page-head-actions .btn,
+  .form-actions .btn { flex: 1 1 150px; }
+  .card { border-radius: 15px; }
+  .grid.stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .stat-card { min-height: 104px; padding: 15px; }
+  .stat-card > strong { font-size: 1.7rem; }
+  .toolbar { align-items: stretch; }
+  .toolbar .search,
+  .toolbar input,
+  .toolbar select,
+  .toolbar .btn { width: 100%; flex: 1 1 100%; }
+  .list-item { align-items: stretch; }
+  .list-item .actions { width: 100%; }
+  .list-item .actions .btn { flex: 1 1 130px; }
+  .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .form-grid { grid-template-columns: 1fr; }
+  .form-grid .span-2 { grid-column: auto; }
+  .input-action { flex-wrap: wrap; }
+  .input-action > input,
+  .input-action > .btn { flex: 1 1 100%; }
+  .pev-check { align-items: flex-start; }
+  .planner-control { min-width: 0; }
+  .modal { padding: 6px; }
+  .modal-box { width: calc(100vw - 12px); max-height: 94vh; border-radius: 16px; }
+}
+
+@media (max-width: 420px) {
+  .grid.stats,
+  .summary-strip { grid-template-columns: 1fr; }
+  .stat-card { min-height: 92px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .list-item,
+  .btn,
+  input,
+  select,
+  textarea { transition-duration: .001ms !important; }
+}
