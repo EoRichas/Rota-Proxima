@@ -5,7 +5,7 @@ services:
     plan: free
     region: virginia
     buildCommand: pip install -r requirements.txt
-    startCommand: python server_sharepoint.py
+    startCommand: python server_final.py
     healthCheckPath: /api/health
     autoDeployTrigger: commit
     envVars:
