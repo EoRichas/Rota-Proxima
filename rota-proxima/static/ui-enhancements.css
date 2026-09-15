@@ -1,0 +1,469 @@
+/* UI complementar do Rota Próxima: sidebar animada, dark mode e loader de páginas. */
+
+:root {
+  --rp-sidebar-expanded: 250px;
+  --rp-sidebar-collapsed: 76px;
+  --rp-green: #177a52;
+  --rp-green-2: #0f5f40;
+  --rp-green-soft: #8fd3b8;
+}
+
+/* --- Sidebar estilo Central --- */
+.app-shell {
+  grid-template-columns: var(--rp-sidebar-expanded) minmax(0, 1fr);
+  transition: grid-template-columns .24s cubic-bezier(.2,.8,.2,1);
+}
+
+.sidebar {
+  width: var(--rp-sidebar-expanded);
+  overflow: hidden;
+  transition: width .24s cubic-bezier(.2,.8,.2,1), transform .2s ease, padding .24s ease;
+}
+
+.nav button {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: color .16s ease, background .16s ease, transform .16s ease;
+}
+
+.nav-icon {
+  width: 21px;
+  height: 21px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 21px;
+  color: var(--rp-green-soft);
+  transform-origin: center;
+  transition: transform .24s cubic-bezier(.2,.8,.2,1), color .18s ease;
+}
+
+.nav-icon svg {
+  width: 21px;
+  height: 21px;
+  display: block;
+}
+
+.nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity .18s ease, transform .24s cubic-bezier(.2,.8,.2,1);
+}
+
+.nav button:hover .nav-icon {
+  transform: translateX(74px) scale(1.18);
+  color: #fff;
+}
+
+.nav button:hover .nav-label {
+  opacity: 0;
+  transform: translateX(22px);
+}
+
+.nav button.active .nav-icon { color: #fff; }
+
+.sidebar-collapse-toggle {
+  min-height: 40px;
+  margin-top: auto;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: #a8bdb3;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+
+.sidebar-collapse-toggle:hover { color: #fff; }
+.sidebar-collapse-toggle svg { width: 18px; height: 18px; transition: transform .24s ease; }
+.sidebar-footer { margin-top: 0; }
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: var(--rp-sidebar-collapsed) minmax(0, 1fr);
+}
+
+.app-shell.sidebar-collapsed .sidebar {
+  width: var(--rp-sidebar-collapsed);
+  padding-inline: 10px;
+}
+
+.app-shell.sidebar-collapsed .sidebar-brand {
+  justify-content: center;
+}
+
+.app-shell.sidebar-collapsed .sidebar-brand > div:last-child,
+.app-shell.sidebar-collapsed .nav-label,
+.app-shell.sidebar-collapsed .sidebar-footer > .btn,
+.app-shell.sidebar-collapsed .user-card-copy,
+.app-shell.sidebar-collapsed #myPasswordBtn {
+  display: none !important;
+}
+
+.app-shell.sidebar-collapsed .nav button {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.app-shell.sidebar-collapsed .nav button:hover .nav-icon {
+  transform: scale(1.18);
+}
+
+.app-shell.sidebar-collapsed .user-card {
+  padding: 10px 5px;
+}
+
+.app-shell.sidebar-collapsed .user-card-top {
+  justify-content: center;
+}
+
+.app-shell.sidebar-collapsed .sidebar-collapse-toggle {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.app-shell.sidebar-collapsed .sidebar-collapse-toggle svg {
+  transform: rotate(180deg);
+}
+
+/* --- Área do usuário + botão de tema no espaço do nome --- */
+.user-card.enhanced-user-card {
+  gap: 10px;
+}
+
+.user-card-top {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.user-card-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.user-card-copy strong,
+.user-card-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-theme-switch {
+  position: relative;
+  width: 46px;
+  height: 25px;
+  flex: 0 0 46px;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.rp-theme-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rp-theme-track {
+  width: 46px;
+  height: 25px;
+  position: relative;
+  display: block;
+  border-radius: 999px;
+  background: #314a40;
+  border: 1px solid rgba(255,255,255,.13);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.08);
+  transition: background .25s ease, border-color .25s ease;
+}
+
+.rp-theme-thumb {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #8b6a00;
+  background: #ffe27a;
+  box-shadow: 0 2px 7px rgba(0,0,0,.28);
+  transition: transform .28s cubic-bezier(.2,.8,.2,1), background .25s ease, color .25s ease;
+}
+
+.rp-theme-thumb svg { width: 11px; height: 11px; }
+.rp-theme-moon { display: none; }
+
+.rp-theme-switch input:checked + .rp-theme-track {
+  background: #0a1712;
+  border-color: #365548;
+}
+
+.rp-theme-switch input:checked + .rp-theme-track .rp-theme-thumb {
+  transform: translateX(21px);
+  color: #dcecff;
+  background: #355f85;
+}
+
+.rp-theme-switch input:checked + .rp-theme-track .rp-theme-sun { display: none; }
+.rp-theme-switch input:checked + .rp-theme-track .rp-theme-moon { display: block; }
+
+/* Usa o novo símbolo visual também na marca pequena da sidebar. */
+.sidebar .brand-mark.small {
+  font-size: 0;
+  background: transparent url('/icon.svg') center / cover no-repeat;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.10);
+}
+
+/* --- Loader do caminhão --- */
+.rp-page-loader {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  padding: 38px 16px;
+}
+
+.rp-loader {
+  width: fit-content;
+  height: fit-content;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rp-truck-wrapper {
+  width: 200px;
+  height: 112px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+
+.rp-truck-body {
+  width: 130px;
+  height: fit-content;
+  margin-bottom: 6px;
+  animation: rpTruckMotion 1s linear infinite;
+}
+
+.rp-truck-body svg { width: 130px; height: auto; display: block; }
+
+@keyframes rpTruckMotion {
+  0%,100% { transform: translateY(0); }
+  50% { transform: translateY(3px); }
+}
+
+.rp-truck-tires {
+  width: 130px;
+  height: fit-content;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 15px;
+  position: absolute;
+  bottom: 0;
+}
+
+.rp-truck-tires svg { width: 24px; height: 24px; }
+
+.rp-road {
+  width: 100%;
+  height: 2px;
+  position: relative;
+  bottom: 0;
+  align-self: flex-end;
+  border-radius: 3px;
+  background: #27332e;
+}
+
+.rp-road::before,
+.rp-road::after {
+  content: "";
+  position: absolute;
+  height: 100%;
+  right: -50%;
+  border-radius: 3px;
+  background: #27332e;
+  animation: rpRoad 1.4s linear infinite;
+}
+
+.rp-road::before { width: 20px; border-left: 10px solid var(--surface); }
+.rp-road::after { width: 10px; right: -65%; border-left: 4px solid var(--surface); }
+
+.rp-lamp-post {
+  position: absolute;
+  right: -90%;
+  bottom: 1px;
+  width: 27px;
+  height: 88px;
+  color: #27332e;
+  animation: rpRoad 1.4s linear infinite;
+}
+
+@keyframes rpRoad {
+  from { transform: translateX(0); }
+  to { transform: translateX(-350px); }
+}
+
+.rp-loader-label {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* --- Dark mode inspirado no Central, preservando verde do Rota Próxima --- */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b1310;
+  --surface: #121d18;
+  --surface-2: #17251f;
+  --text: #eef5f1;
+  --muted: #94a79e;
+  --line: #2b3b34;
+  --primary: #1f6f50;
+  --primary-2: #285f4b;
+  --success: #7ed5aa;
+  --success-bg: #153428;
+  --warn: #f7bd79;
+  --warn-bg: #392815;
+  --danger: #ff9d9d;
+  --danger-bg: #3b1d1d;
+  --blue: #9fc0ff;
+  --blue-bg: #172b45;
+}
+
+html[data-theme="dark"] body,
+html[data-theme="dark"] .main-area,
+html[data-theme="dark"] .page {
+  background: var(--bg);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .sidebar {
+  background: #081812;
+  border-right: 1px solid #1f352b;
+}
+
+html[data-theme="dark"] .nav button { color: #aebfb7; }
+html[data-theme="dark"] .nav button:hover,
+html[data-theme="dark"] .nav button.active { background: #173329; color: #fff; }
+html[data-theme="dark"] .user-card { background: #142a21; }
+html[data-theme="dark"] .sidebar .btn.ghost { color: #dfe9e4; border-color: #365044; }
+
+html[data-theme="dark"] .card,
+html[data-theme="dark"] .list-item,
+html[data-theme="dark"] .modal,
+html[data-theme="dark"] .modal-box,
+html[data-theme="dark"] .summary-box,
+html[data-theme="dark"] .contact-box,
+html[data-theme="dark"] .selected-pev-report,
+html[data-theme="dark"] .report-kpi,
+html[data-theme="dark"] .production-route-card,
+html[data-theme="dark"] .route-monitor-card {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+html[data-theme="dark"] input,
+html[data-theme="dark"] select,
+html[data-theme="dark"] textarea {
+  color: var(--text);
+  background: #0f1915;
+  border-color: #35483f;
+}
+
+html[data-theme="dark"] input:focus,
+html[data-theme="dark"] select:focus,
+html[data-theme="dark"] textarea:focus {
+  border-color: #4d9b78;
+  box-shadow: 0 0 0 3px rgba(64,148,108,.16);
+}
+
+html[data-theme="dark"] .field > span,
+html[data-theme="dark"] th,
+html[data-theme="dark"] .stop-meta,
+html[data-theme="dark"] .list-item-main span,
+html[data-theme="dark"] .muted { color: var(--muted) !important; }
+
+html[data-theme="dark"] .empty {
+  color: var(--muted);
+  background: rgba(18,29,24,.72);
+  border-color: #33453d;
+}
+
+html[data-theme="dark"] .btn.secondary {
+  color: #eaf2ee;
+  background: #26382f;
+}
+
+html[data-theme="dark"] .btn.ghost {
+  color: #d7e4dd;
+  border-color: #3a4b43;
+}
+
+html[data-theme="dark"] .mode-toggle,
+html[data-theme="dark"] .icon-btn:hover { background: #213229; }
+html[data-theme="dark"] .route-stop:not(:last-child)::after,
+html[data-theme="dark"] .timeline-item,
+html[data-theme="dark"] th,
+html[data-theme="dark"] td { border-color: var(--line); }
+html[data-theme="dark"] .stop-number { background: #245f47; }
+html[data-theme="dark"] .mobile-header { background: rgba(11,19,16,.96); color: var(--text); border-color: var(--line); }
+html[data-theme="dark"] .avatar { background: #1f6f50; }
+html[data-theme="dark"] .rp-road,
+html[data-theme="dark"] .rp-road::before,
+html[data-theme="dark"] .rp-road::after,
+html[data-theme="dark"] .rp-lamp-post { color: #9eb0a7; background-color: #9eb0a7; }
+html[data-theme="dark"] .rp-road::before,
+html[data-theme="dark"] .rp-road::after { border-left-color: var(--surface); }
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-truck-body,
+  .rp-road::before,
+  .rp-road::after,
+  .rp-lamp-post { animation-duration: .001ms !important; animation-iteration-count: 1 !important; }
+  .sidebar,
+  .app-shell,
+  .nav-icon,
+  .nav-label { transition-duration: .001ms !important; }
+}
+
+@media (max-width: 760px) {
+  .app-shell,
+  .app-shell.sidebar-collapsed { display: block; }
+  .sidebar,
+  .app-shell.sidebar-collapsed .sidebar {
+    width: 278px;
+    padding: 18px;
+  }
+  .app-shell.sidebar-collapsed .sidebar-brand > div:last-child,
+  .app-shell.sidebar-collapsed .nav-label,
+  .app-shell.sidebar-collapsed .sidebar-footer > .btn,
+  .app-shell.sidebar-collapsed .user-card-copy,
+  .app-shell.sidebar-collapsed #myPasswordBtn { display: initial !important; }
+  .app-shell.sidebar-collapsed .sidebar-brand { justify-content: flex-start; }
+  .app-shell.sidebar-collapsed .nav button { justify-content: flex-start; padding-inline: 12px; }
+  .nav button:hover .nav-icon,
+  .app-shell.sidebar-collapsed .nav button:hover .nav-icon { transform: none; }
+  .nav button:hover .nav-label { opacity: 1; transform: none; }
+  .sidebar-collapse-toggle { display: none; }
+  .user-card-top { align-items: center; }
+  html[data-theme="dark"] .mobile-header { background: rgba(11,19,16,.96); }
+}
