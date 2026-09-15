@@ -1,5 +1,5 @@
-const CACHE='rota-proxima-cassola-login-20260915-v4';
-const ASSETS=['/','/index.html','/styles.css','/workflow-patch.css','/dashboard-center.css','/ui-cleanup.css','/mobile-access.css','/ui-enhancements.css','/fluid-design.css','/cassola-login.css','/app.js','/workflow-patch.js','/dashboard-center.js','/ui-cleanup.js','/mobile-access.js','/status-location-patch.js','/ui-enhancements.js','/manifest.webmanifest','/icon.svg','/cassola-logo.jpeg'];
+const CACHE='rota-proxima-cassola-login-20260915-v5';
+const ASSETS=['/','/index.html','/styles.css','/workflow-patch.css','/dashboard-center.css','/ui-cleanup.css','/mobile-access.css','/ui-enhancements.css','/fluid-design.css','/cassola-login.css','/cassola-login-reference.css','/cassola-login-hero.webp','/app.js','/workflow-patch.js','/dashboard-center.js','/ui-cleanup.js','/mobile-access.js','/status-location-patch.js','/ui-enhancements.js','/manifest.webmanifest','/icon.svg','/cassola-logo.jpeg'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)))});
 self.addEventListener('activate',e=>e.waitUntil(Promise.all([self.clients.claim(),caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))])));
 self.addEventListener('fetch',e=>{
