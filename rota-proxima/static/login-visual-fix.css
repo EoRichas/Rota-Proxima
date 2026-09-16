@@ -1,0 +1,45 @@
+/* Correções finais do login: hero da caçamba e artefato inferior da logo. */
+
+@media (min-width: 821px) {
+  .cassola-approved-hero {
+    object-position: left center !important;
+  }
+}
+
+.cassola-logo-crop {
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+  display: block;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(20,86,61,.10);
+}
+
+.cassola-logo-crop > img {
+  width: 72px !important;
+  height: 72px !important;
+  display: block;
+  object-fit: cover;
+  border-radius: 50%;
+  box-shadow: none !important;
+  clip-path: inset(0 0 2px 0 round 50%);
+}
+
+html[data-theme="dark"] .cassola-logo-crop {
+  background: #101915;
+}
+
+@media (max-width: 820px) {
+  .cassola-logo-crop {
+    width: 58px;
+    height: 58px;
+    flex-basis: 58px;
+  }
+
+  .cassola-logo-crop > img {
+    width: 58px !important;
+    height: 58px !important;
+  }
+}
