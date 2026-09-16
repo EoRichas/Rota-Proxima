@@ -134,8 +134,6 @@ def _audit_with_auto_finish(token, user, action, entity_type, entity_id, summary
             if route and route.get('auto_finished'):
                 print(f'[ROUTE INTEGRITY] Rota {entity_id} finalizada após a última pesagem')
         except Exception as exc:
-            # A pesagem já foi persistida. Não transforma uma sincronização tardia
-            # em erro para a Produção; o diagnóstico fica explícito no log.
             print(f'[ROUTE INTEGRITY WARNING] Rota {entity_id}: {type(exc).__name__}: {exc}')
     return result
 
@@ -150,6 +148,19 @@ class HardenedProductionHandler(_BASE_HANDLER):
         self.send_header('Cross-Origin-Resource-Policy', 'same-origin')
 
     def api_get(self, path):
+        if path == '/api/client-reset':
+            body = b'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>Rota Proxima - Reset</title><style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f3f8f5;color:#163d2e;display:grid;place-items:center;min-height:100vh;margin:0}.box{max-width:560px;padding:32px;text-align:center;background:#fff;border-radius:20px;box-shadow:0 18px 60px rgba(20,70,50,.12)}h1{margin:0 0 10px;font-size:24px}p{color:#5f756b;line-height:1.5}</style></head><body><div class="box"><h1>Atualizando o Rota Proxima...</h1><p>O cache antigo e o PWA estao sendo removidos. Voce sera redirecionado automaticamente.</p></div><script>try{localStorage.clear();sessionStorage.clear()}catch(e){};setTimeout(()=>location.replace('/?fresh=client-reset-20260916-1'),1200)</script></body></html>'''
+            self.send_response(200)
+            self.common_security_headers()
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Clear-Site-Data', '"cache", "storage"')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         match = re.fullmatch(r'/api/routes/(\d+)/last-location-address', path)
         if match:
             user = self.require_user(('admin', 'commercial_manager'))
@@ -187,8 +198,6 @@ class HardenedProductionHandler(_BASE_HANDLER):
                     f'{type(exc).__name__}: {exc}'
                 )
 
-            # A tela recebe o endereço e o instante da última leitura. As
-            # coordenadas continuam armazenadas internamente e não são exibidas.
             return self.send_json({
                 'route_status': route.get('status'),
                 'last_location': {
@@ -200,8 +209,6 @@ class HardenedProductionHandler(_BASE_HANDLER):
         return super().api_get(path)
 
     def api_write(self, method, path):
-        # Defesa adicional contra POST/PUT/DELETE iniciados por página de outro site.
-        # Navegadores antigos/integrações sem Sec-Fetch-Site continuam compatíveis.
         if method in ('POST', 'PUT', 'DELETE'):
             fetch_site = (self.headers.get('Sec-Fetch-Site') or '').strip().lower()
             if fetch_site == 'cross-site':
