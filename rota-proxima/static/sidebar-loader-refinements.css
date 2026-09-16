@@ -1,0 +1,118 @@
+/* Refinos visuais posteriores ao PR #30. */
+
+/* Sidebar: a rolagem continua funcionando, mas sem exibir a barra visual. */
+#appShell .sidebar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+#appShell .sidebar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* Quando recolhida, o cartão do usuário desaparece visualmente e fica somente
+   o controle de tema centralizado. */
+#appShell.sidebar-collapsed .user-card.enhanced-user-card {
+  width: 100%;
+  padding: 0 !important;
+  margin: 0 !important;
+  gap: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+#appShell.sidebar-collapsed .user-card.enhanced-user-card .user-card-top {
+  width: 100%;
+  min-height: 34px;
+  justify-content: center !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+#appShell.sidebar-collapsed .user-card.enhanced-user-card .rp-theme-switch {
+  margin: 0 auto;
+}
+
+#appShell.sidebar-collapsed .sidebar-footer {
+  gap: 0;
+}
+
+/* Prévia da rota: volta ao comportamento visual da PR #17. Ela permanece na
+   coluna da direita no topo do grid, mas rola junto com a página normalmente. */
+.route-builder > .sticky-card,
+.route-builder .sticky-card {
+  position: static !important;
+  top: auto !important;
+  align-self: start !important;
+}
+
+/* Loading Cassola. O caminhão mantém o movimento existente; estes estilos
+   apenas refinam o desenho e restauram o poste detalhado do modelo original. */
+.rp-truck-wrapper {
+  height: 100px;
+}
+
+.rp-truck-body {
+  margin-bottom: 6px;
+}
+
+.rp-truck-body .cassola-loader-wordmark {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: .9px;
+  fill: #145d43;
+  paint-order: stroke;
+  stroke: rgba(255,255,255,.24);
+  stroke-width: .35px;
+}
+
+.rp-road {
+  height: 1.5px;
+  background-color: #282828;
+}
+
+.rp-road::before,
+.rp-road::after {
+  background-color: #282828;
+  animation-duration: 1.4s;
+  animation-timing-function: linear;
+}
+
+.rp-lamp-post {
+  width: auto !important;
+  height: 90px !important;
+  bottom: 0 !important;
+  right: -90% !important;
+  color: #282828 !important;
+  background: transparent !important;
+  animation-duration: 1.4s !important;
+  animation-timing-function: linear !important;
+}
+
+html[data-theme="dark"] .rp-lamp-post {
+  color: #a7b5ae !important;
+  background: transparent !important;
+}
+
+@media (max-width: 980px) {
+  /* No drawer móvel o bloco do usuário continua completo; o refinamento acima
+     se aplica apenas ao estado recolhido de desktop. */
+  #appShell.sidebar-collapsed .user-card.enhanced-user-card {
+    padding: 11px !important;
+    background: #1f2937 !important;
+    border-radius: 12px !important;
+  }
+
+  #appShell.sidebar-collapsed .user-card.enhanced-user-card .user-card-top {
+    justify-content: space-between !important;
+  }
+
+  #appShell.sidebar-collapsed .user-card.enhanced-user-card .rp-theme-switch {
+    margin: 0;
+  }
+}
