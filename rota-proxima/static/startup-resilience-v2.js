@@ -35,39 +35,42 @@
     }
   }
 
-  window.fetch = function rotaFailFastFetch(input, init) {
+  window.fetch = function rotaNoPreloadFetch(input, init) {
     const path = sameOriginPath(input);
 
-    // A checagem de sessão nunca pode bloquear a tela de login.
+    // O login deve aparecer imediatamente. Não fazemos nenhuma viagem ao backend
+    // durante o primeiro desenho da tela.
     if (path === '/api/me') {
-      return fetchWithDeadline(input, init, 7000, () => jsonResponse({user: null, session_timeout: true}));
+      return Promise.resolve(jsonResponse({user: null, skipped_preload: true}));
     }
-
-    // O sistema já está configurado em produção; em indisponibilidade temporária,
-    // mantenha o login utilizável em vez de prender a página no primeiro acesso.
     if (path === '/api/setup-status') {
-      return fetchWithDeadline(input, init, 5000, () => jsonResponse({needs_setup: false, setup_timeout: true}));
+      return Promise.resolve(jsonResponse({needs_setup: false, skipped_preload: true}));
     }
 
+    // A primeira chamada real ao servidor acontece somente quando o usuário entra.
     if (path === '/api/login') {
-      return fetchWithDeadline(input, init, 20000, () => jsonResponse({error: 'O login demorou para responder. Tente novamente.'}, 504));
+      return fetchWithDeadline(input, init, 20000, () =>
+        jsonResponse({error: 'O servidor demorou para responder ao login. Tente novamente.'}, 504)
+      );
     }
 
     if (path === '/api/dashboard' || path === '/api/dashboard-pending') {
-      return fetchWithDeadline(input, init, 25000, () => jsonResponse({error: 'O dashboard demorou para responder. Tente novamente.'}, 504));
+      return fetchWithDeadline(input, init, 25000, () =>
+        jsonResponse({error: 'O dashboard demorou para responder. Tente novamente.'}, 504)
+      );
     }
 
     return nativeFetch(input, init);
   };
 
-  function forceLoginReady() {
+  function keepLoginVisible() {
     const auth = document.getElementById('authScreen');
     const app = document.getElementById('appShell');
     const login = document.getElementById('loginForm');
     const setup = document.getElementById('setupForm');
     const status = document.getElementById('authStatus');
-
     if (!auth || !app || !login) return;
+
     if (app.classList.contains('hidden') && !auth.classList.contains('hidden')) {
       login.classList.remove('hidden');
       setup?.classList.add('hidden');
@@ -78,7 +81,12 @@
     }
   }
 
-  // Watchdog visual: mesmo que algum script externo falhe, o usuário nunca fica
-  // indefinidamente olhando “Conectando ao servidor...”.
-  setTimeout(forceLoginReady, 9000);
+  // O formulário nasce utilizável, independentemente do estado da API.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', keepLoginVisible, {once: true});
+  } else {
+    keepLoginVisible();
+  }
+  setTimeout(keepLoginVisible, 50);
+  setTimeout(keepLoginVisible, 500);
 })();
