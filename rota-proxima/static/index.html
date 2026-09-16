@@ -16,8 +16,8 @@
   <link rel="stylesheet" href="/cassola-login.css?v=ui-20260916-9" />
   <link rel="stylesheet" href="/cassola-login-reference.css?v=ui-20260916-9" />
   <link rel="stylesheet" href="/design-fluid.css?v=ui-20260916-9" />
-  <link rel="stylesheet" href="/login-visual-fix.css?v=ui-20260916-9" />
-  <link rel="stylesheet" href="/login-hero-inline.css?v=ui-20260916-9" />
+  <link rel="stylesheet" href="/login-visual-fix.css?v=login-images-20260916-10" />
+  <link rel="preload" as="image" href="/cassola-login-hero-approved.webp?v=login-images-20260916-10" media="(min-width: 821px)" />
   <script>
     window.__ROTA_DISABLE_PWA__ = true;
 
@@ -62,12 +62,29 @@
 
   <main id="authScreen" class="auth-screen cassola-auth-screen">
     <div class="cassola-auth-layout">
-      <section class="cassola-auth-visual" aria-hidden="true"></section>
+      <section class="cassola-auth-visual" aria-label="Cassola Ambiental">
+        <div class="cassola-hero-heading">
+          <div class="cassola-hero-brand">
+            <span class="cassola-logo-frame"><img src="/cassola-logo.jpeg" alt="Cassola Ambiental" width="1264" height="1280" /></span>
+            <div class="cassola-hero-wordmark" aria-hidden="true"><strong>CASSOLA</strong><span>AMBIENTAL</span></div>
+          </div>
+          <h1>Planejamento e acompanhamento da operação</h1>
+          <ul class="cassola-hero-services" aria-label="Operação Cassola">
+            <li><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0Z" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="10" r="2.5" fill="currentColor"/></svg><span>PEVs</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="5" cy="18" r="3" stroke="currentColor" stroke-width="2"/><circle cx="19" cy="6" r="3" stroke="currentColor" stroke-width="2"/><path d="m7 16 10-8" stroke="currentColor" stroke-width="2"/></svg><span>Rotas</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 20v-6m7 6V9m7 11V3" stroke="currentColor" stroke-width="4"/></svg><span>Acompanhamento</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 5h12v13H2V5Zm12 5h4l4 5v3h-8" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="6" cy="18" r="2" fill="currentColor"/><circle cx="18" cy="18" r="2" fill="currentColor"/></svg><span>Coletas</span></li>
+          </ul>
+        </div>
+        <div class="cassola-hero-photo">
+          <img src="/cassola-login-hero-approved.webp?v=login-images-20260916-10" alt="Arte da caçamba amarela da Cassola Ambiental ao lado de um PEV." width="884" height="941" fetchpriority="high" decoding="async" />
+        </div>
+      </section>
 
       <section class="auth-card cassola-auth-card">
         <div class="cassola-auth-card-head">
           <div class="cassola-card-brand">
-            <img src="/cassola-logo.jpeg?v=ui-20260916-9" alt="Cassola Ambiental" />
+            <span class="cassola-logo-frame"><img src="/cassola-logo.jpeg" alt="Cassola Ambiental" width="1264" height="1280" /></span>
             <div class="cassola-card-divider"></div>
             <div class="cassola-card-title"><strong>Rota Próxima</strong><span>Sistema interno de rotas e acompanhamento operacional.</span></div>
           </div>
