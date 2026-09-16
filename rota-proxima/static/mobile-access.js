@@ -1,4 +1,12 @@
 (() => {
+  /*
+   * A sidebar sempre nasce expandida em um novo carregamento. O usuário ainda
+   * pode recolhê-la durante o uso, mas uma preferência antiga do navegador não
+   * deixa computadores diferentes abrirem com layouts diferentes.
+   */
+  try { localStorage.removeItem('rota_proxima_sidebar_v1'); } catch (_) {}
+  document.getElementById('appShell')?.classList.remove('sidebar-collapsed');
+
   let installPrompt = null;
   let promptInFlight = false;
   let installed = false;

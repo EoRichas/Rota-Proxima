@@ -1,0 +1,133 @@
+/* Ajustes finais de layout validados a partir do uso real em desktop. */
+
+/* 1) A sidebar ocupa sempre toda a altura visível e não deixa faixa branca
+   quando a página principal fica maior do que a viewport. */
+@media (min-width: 981px) {
+  #appShell.app-shell {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  #appShell .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  #appShell .main-area {
+    grid-column: 2;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  /* A prévia permanece na coluna direita, no mesmo ponto visual do início
+     do planejamento, em vez de descer com a lista longa de PEVs. */
+  .route-builder {
+    align-items: start;
+  }
+
+  .route-builder > .sticky-card,
+  .route-builder .sticky-card {
+    position: sticky !important;
+    top: 22px;
+    align-self: start;
+  }
+}
+
+/* Em telas intermediárias a prévia continua imediatamente após os controles,
+   sem criar espaçamentos artificiais no final da página. */
+@media (min-width: 761px) and (max-width: 980px) {
+  .route-builder > .sticky-card,
+  .route-builder .sticky-card {
+    position: relative !important;
+    top: auto !important;
+    align-self: start;
+  }
+}
+
+/* 2) O dialog é o único contêiner do modal; somente o conteúdo interno rola.
+   Isso elimina as duas barras verticais vistas ao editar uma PEV. */
+.modal {
+  max-height: calc(100dvh - 24px);
+  overflow: hidden !important;
+}
+
+.modal > #modalContent {
+  max-height: calc(100dvh - 24px);
+  overflow: hidden;
+}
+
+.modal-box {
+  max-height: calc(100dvh - 24px);
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* 3) As duas logos usam exatamente o mesmo recorte. O acréscimo mínimo no
+   recorte inferior remove a linha residual de 1px do JPEG sem deformar a arte. */
+#authScreen .cassola-logo-frame {
+  overflow: hidden !important;
+}
+
+#authScreen .cassola-logo-frame > img {
+  clip-path: inset(0 0 5.2% 0) !important;
+  -webkit-clip-path: inset(0 0 5.2% 0) !important;
+}
+
+/* 4) Fundo do login mais preenchido: mantém pins/rota e acrescenta uma malha
+   logística discreta nas áreas vazias, sem competir com o formulário. */
+#authScreen .cassola-login-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: .58;
+  background:
+    radial-gradient(circle at 67% 18%, rgba(26, 121, 82, .34) 0 2px, transparent 2.8px),
+    radial-gradient(circle at 76% 32%, rgba(26, 121, 82, .26) 0 2px, transparent 2.8px),
+    radial-gradient(circle at 90% 47%, rgba(203, 157, 45, .28) 0 2px, transparent 2.8px),
+    radial-gradient(circle at 71% 63%, rgba(26, 121, 82, .26) 0 2px, transparent 2.8px),
+    radial-gradient(circle at 84% 79%, rgba(26, 121, 82, .32) 0 2px, transparent 2.8px),
+    linear-gradient(118deg, transparent 0 61%, rgba(27, 121, 83, .08) 61.15% 61.35%, transparent 61.5% 100%),
+    linear-gradient(64deg, transparent 0 70%, rgba(208, 161, 39, .07) 70.15% 70.32%, transparent 70.5% 100%);
+}
+
+#authScreen .cassola-login-backdrop {
+  background:
+    radial-gradient(circle at 92% 12%, rgba(35, 132, 91, .15), transparent 24%),
+    radial-gradient(circle at 72% 42%, rgba(35, 132, 91, .08), transparent 20%),
+    radial-gradient(circle at 87% 88%, rgba(214, 167, 44, .10), transparent 22%),
+    linear-gradient(135deg, rgba(241, 248, 244, .92), rgba(229, 242, 235, .82));
+}
+
+html[data-theme="dark"] #authScreen .cassola-login-backdrop::after {
+  opacity: .44;
+  background:
+    radial-gradient(circle at 67% 18%, rgba(105, 203, 155, .34) 0 2px, transparent 2.8px),
+    radial-gradient(circle at 76% 32%, rgba(105, 203, 155, .26) 0 2px, transparent 2.8px),
+    radial-gradient(circle at 90% 47%, rgba(225, 181, 70, .25) 0 2px, transparent 2.8px),
+    radial-gradient(circle at 71% 63%, rgba(105, 203, 155, .24) 0 2px, transparent 2.8px),
+    radial-gradient(circle at 84% 79%, rgba(105, 203, 155, .30) 0 2px, transparent 2.8px),
+    linear-gradient(118deg, transparent 0 61%, rgba(105, 203, 155, .08) 61.15% 61.35%, transparent 61.5% 100%),
+    linear-gradient(64deg, transparent 0 70%, rgba(225, 181, 70, .06) 70.15% 70.32%, transparent 70.5% 100%);
+}
+
+@media (max-width: 980px) {
+  #appShell .main-area {
+    grid-column: auto;
+  }
+
+  /* No menu móvel a sidebar continua sendo um drawer e usa a rolagem própria
+     somente se a altura física do aparelho exigir. */
+  #appShell .sidebar {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+}
