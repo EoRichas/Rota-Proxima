@@ -1,91 +1,115 @@
 (() => {
   let installPrompt = null;
-  let installed = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  let promptInFlight = false;
+  let installed = false;
   let loginObserver = null;
 
-  function toastSafe(message, type='') {
-    if (typeof toast === 'function') return toast(message, type);
+  function standaloneMediaMatches() {
+    try {
+      return typeof window.matchMedia === 'function'
+        && window.matchMedia('(display-mode: standalone)').matches;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  installed = standaloneMediaMatches() || window.navigator?.standalone === true;
+
+  function toastSafe(message, type = '') {
+    try {
+      if (typeof toast === 'function') return toast(message, type);
+    } catch (_) {}
     console.info(message);
   }
 
-  window.addEventListener('beforeinstallprompt', event => {
-    event.preventDefault();
-    installPrompt = event;
-    syncInstallButton();
-  });
-
-  window.addEventListener('appinstalled', () => {
-    installed = true;
-    installPrompt = null;
-    syncInstallButton();
-    toastSafe('Rota Próxima instalado no aparelho.', 'success');
-  });
-
   function isIOS() {
-    return /iphone|ipad|ipod/i.test(navigator.userAgent);
+    return /iphone|ipad|ipod/i.test(window.navigator?.userAgent || '');
+  }
+
+  function isAndroid() {
+    return /android/i.test(window.navigator?.userAgent || '');
   }
 
   function isStandalone() {
-    return installed || window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    return installed || standaloneMediaMatches() || window.navigator?.standalone === true;
   }
 
-  function fallbackInstallInfo() {
+  function showInstallHelp() {
     if (isStandalone()) {
-      return toastSafe('O Rota Próxima já está instalado neste aparelho.', 'success');
-    }
-
-    if (typeof modal !== 'function') {
-      return toastSafe('Use o menu do navegador e escolha “Instalar aplicativo” ou “Adicionar à tela inicial”.');
-    }
-
-    if (isIOS()) {
-      modal(`
-        <div class="modal-box mobile-install-box">
-          <div class="modal-head">
-            <div><span class="eyebrow">Instalação</span><h2>Instalar no iPhone</h2></div>
-            <button type="button" class="icon-btn modal-close">×</button>
-          </div>
-          <div class="info mobile-install-help">
-            Abra esta página no Safari, toque em <strong>Compartilhar</strong> e escolha <strong>Adicionar à Tela de Início</strong>.
-          </div>
-          <div class="form-actions"><button type="button" class="btn primary modal-close">Entendi</button></div>
-        </div>`);
+      toastSafe('O Rota Próxima já está instalado neste aparelho.', 'success');
       return;
     }
 
-    modal(`
+    const ios = isIOS();
+    const heading = ios ? 'Instalar no iPhone' : 'Instalar Rota Próxima';
+    const steps = ios
+      ? '<ol class="mobile-install-steps"><li>Abra esta página no <strong>Safari</strong>.</li><li>Toque em <strong>Compartilhar</strong>.</li><li>Escolha <strong>Adicionar à Tela de Início</strong>.</li></ol>'
+      : isAndroid()
+        ? '<ol class="mobile-install-steps"><li>Abra o menu <strong>⋮</strong> do Chrome.</li><li>Toque em <strong>Instalar aplicativo</strong> ou <strong>Adicionar à tela inicial</strong>.</li><li>Confirme a instalação.</li></ol>'
+        : '<ol class="mobile-install-steps"><li>Abra o menu do navegador.</li><li>Escolha <strong>Instalar aplicativo</strong> ou <strong>Adicionar à tela inicial</strong>.</li><li>Confirme para criar o acesso no aparelho.</li></ol>';
+
+    const markup = `
       <div class="modal-box mobile-install-box">
         <div class="modal-head">
-          <div><span class="eyebrow">Instalação</span><h2>Instalar Rota Próxima</h2></div>
-          <button type="button" class="icon-btn modal-close">×</button>
+          <div><span class="eyebrow">Acesso no celular</span><h2>${heading}</h2></div>
+          <button type="button" class="icon-btn modal-close" aria-label="Fechar">×</button>
         </div>
-        <div class="info mobile-install-help">
-          O navegador ainda não liberou a instalação automática. Abra o menu do navegador e escolha <strong>Instalar aplicativo</strong> ou <strong>Adicionar à tela inicial</strong>.
-        </div>
+        <div class="info mobile-install-help">O Rota Próxima pode ser adicionado à tela inicial para abrir como aplicativo.</div>
+        ${steps}
         <div class="form-actions"><button type="button" class="btn primary modal-close">Fechar</button></div>
-      </div>`);
-  }
-
-  async function requestInstall() {
-    if (isStandalone()) return fallbackInstallInfo();
-    if (!installPrompt) return fallbackInstallInfo();
+      </div>`;
 
     try {
-      installPrompt.prompt();
-      const choice = await installPrompt.userChoice;
-      if (choice.outcome === 'accepted') {
-        installPrompt = null;
+      if (typeof modal === 'function') {
+        const dialog = document.getElementById('modal');
+        if (dialog?.open) dialog.close();
+        modal(markup);
+        return;
       }
-      syncInstallButton();
+    } catch (_) {}
+
+    toastSafe(ios
+      ? 'No Safari: Compartilhar → Adicionar à Tela de Início.'
+      : 'Abra o menu do navegador e escolha “Instalar aplicativo”.');
+  }
+
+  async function requestInstall(event) {
+    event?.preventDefault?.();
+    if (promptInFlight) return;
+    if (isStandalone()) return showInstallHelp();
+    if (!installPrompt) return showInstallHelp();
+
+    const prompt = installPrompt;
+    promptInFlight = true;
+    try {
+      await prompt.prompt();
+      const choice = await prompt.userChoice;
+      if (choice?.outcome === 'accepted') {
+        installPrompt = null;
+      } else {
+        // O evento pode ser usado novamente enquanto a página continuar aberta.
+        installPrompt = prompt;
+      }
     } catch (_) {
-      fallbackInstallInfo();
+      installPrompt = prompt;
+      showInstallHelp();
+    } finally {
+      promptInFlight = false;
+      syncInstallButton();
     }
+  }
+
+  function bindInstallButton(button) {
+    if (!button || button.dataset.mobileAccessBound === '1') return;
+    button.addEventListener('click', requestInstall);
+    button.dataset.mobileAccessBound = '1';
   }
 
   function syncInstallButton() {
     const button = document.getElementById('installMobileApp');
     if (!button) return false;
 
+    bindInstallButton(button);
     const alreadyInstalled = isStandalone();
     const desiredLabel = alreadyInstalled ? 'Rota Próxima já instalado' : 'Instalar Rota Próxima no celular';
     const desiredTitle = alreadyInstalled ? 'Aplicativo já instalado' : 'Instalar aplicativo';
@@ -97,8 +121,6 @@
 
     const text = button.querySelector('b');
     if (text && text.textContent !== desiredText) text.textContent = desiredText;
-
-    if (button.onclick !== requestInstall) button.onclick = requestInstall;
     return true;
   }
 
@@ -140,9 +162,27 @@
     stopLoginObserver();
   }
 
-  // Observa apenas enquanto o botão legado ainda não existe. Assim que ele é
-  // encontrado/criado o observer é desligado, evitando qualquer ciclo de mutação.
-  loginObserver = new MutationObserver(patchLegacyLoginAccess);
-  loginObserver.observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener('beforeinstallprompt', event => {
+    event.preventDefault();
+    installPrompt = event;
+    syncInstallButton();
+  });
+
+  window.addEventListener('appinstalled', () => {
+    installed = true;
+    installPrompt = null;
+    syncInstallButton();
+    toastSafe('Rota Próxima instalado no aparelho.', 'success');
+  });
+
+  window.addEventListener('pageshow', syncInstallButton);
+  document.addEventListener('visibilitychange', syncInstallButton);
+
+  // O botão já vem no HTML atual. O observer fica apenas como compatibilidade
+  // para versões antigas do login e é desligado assim que encontra o botão.
+  if (typeof MutationObserver === 'function') {
+    loginObserver = new MutationObserver(patchLegacyLoginAccess);
+    loginObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
   patchLegacyLoginAccess();
 })();
