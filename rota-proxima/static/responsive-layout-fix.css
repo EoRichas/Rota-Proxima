@@ -1,0 +1,238 @@
+/*
+ * Correções finais de responsividade.
+ *
+ * O modal é um <dialog> de 760px. A regra anterior dava ao conteúdo interno
+ * até 900px, criando uma barra horizontal e cortando os primeiros campos do
+ * cadastro de PEV. Esta camada mantém cada filho dentro do seu contêiner e
+ * transforma a navegação em um menu móvel quando a largura útil fica menor.
+ */
+
+html,
+body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+#appShell,
+.main-area,
+#page,
+.page,
+.card,
+.grid,
+.dashboard-layout,
+.dashboard-grid,
+.page-head,
+.page-head > *,
+.page-head-actions,
+.toolbar,
+.list-item,
+.list-item-main,
+.actions {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.main-area,
+#page,
+.page {
+  overflow-x: hidden;
+}
+
+/* O conteúdo do modal acompanha o <dialog>; nunca usa a largura do viewport. */
+.modal {
+  box-sizing: border-box;
+  width: min(760px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  margin: auto;
+  overflow-x: hidden;
+}
+
+.modal-box {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.modal-box > *,
+.modal-box .field,
+.modal-box .span-2,
+.modal-box .input-action,
+.modal-box .form-actions,
+.modal-box input,
+.modal-box select,
+.modal-box textarea,
+.modal-box button {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.modal-box p,
+.modal-box small,
+.modal-box label,
+.modal-box h2,
+.modal-box h3 {
+  overflow-wrap: anywhere;
+}
+
+#pevForm .form-grid {
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#pevForm .mode-toggle {
+  width: 100%;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+#pevForm .form-actions {
+  flex-wrap: wrap;
+}
+
+/* Em uma janela reduzida, uma coluna evita campos espremidos e cortes laterais. */
+@media (max-width: 980px) {
+  #pevForm .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #pevForm .form-grid .span-2 {
+    grid-column: auto;
+  }
+
+  .app-shell,
+  .app-shell.sidebar-collapsed {
+    display: block;
+  }
+
+  .sidebar,
+  .app-shell.sidebar-collapsed .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(278px, calc(100vw - 42px));
+    max-width: calc(100vw - 42px);
+    overflow-y: auto;
+    transform: translateX(-103%);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .app-shell.sidebar-collapsed .sidebar {
+    padding: 18px;
+  }
+
+  .app-shell.sidebar-collapsed .sidebar-brand > div:last-child,
+  .app-shell.sidebar-collapsed .nav-label,
+  .app-shell.sidebar-collapsed .sidebar-footer > .btn,
+  .app-shell.sidebar-collapsed .user-card-copy,
+  .app-shell.sidebar-collapsed #myPasswordBtn {
+    display: initial !important;
+  }
+
+  .app-shell.sidebar-collapsed .sidebar-brand {
+    justify-content: flex-start;
+  }
+
+  .app-shell.sidebar-collapsed .nav button {
+    justify-content: flex-start;
+    padding-inline: 12px;
+  }
+
+  .sidebar-collapse-toggle {
+    display: none;
+  }
+
+  .mobile-header {
+    display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    width: 100%;
+    min-height: 58px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 13px;
+    background: rgba(255, 255, 255, .96);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .page {
+    width: 100%;
+    padding: 20px 14px 36px;
+  }
+
+  .page-head {
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .page-head-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .page-head-actions .btn {
+    flex: 1 1 auto;
+  }
+
+  .grid.stats,
+  .grid.two,
+  .grid.three,
+  .dashboard-summary-grid,
+  .dashboard-pending-grid,
+  .report-kpis,
+  .route-live-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pev-check {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .planner-control {
+    grid-column: 2;
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .grid.stats,
+  .grid.two,
+  .grid.three,
+  .dashboard-summary-grid,
+  .dashboard-pending-grid,
+  .report-kpis,
+  .route-live-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .modal {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+  }
+
+  .modal-box {
+    padding: clamp(14px, 4vw, 18px);
+  }
+
+  #pevForm .input-action {
+    grid-template-columns: 1fr;
+  }
+
+  #pevForm .input-action > .btn,
+  #pevForm .form-actions .btn {
+    width: 100%;
+  }
+
+  #pevForm .form-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+}
