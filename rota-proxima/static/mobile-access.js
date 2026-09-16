@@ -1,6 +1,7 @@
 (() => {
   let installPrompt = null;
   let installed = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  let loginObserver = null;
 
   function toastSafe(message, type='') {
     if (typeof toast === 'function') return toast(message, type);
@@ -83,20 +84,35 @@
 
   function syncInstallButton() {
     const button = document.getElementById('installMobileApp');
-    if (!button) return;
+    if (!button) return false;
+
     const alreadyInstalled = isStandalone();
+    const desiredLabel = alreadyInstalled ? 'Rota Próxima já instalado' : 'Instalar Rota Próxima no celular';
+    const desiredTitle = alreadyInstalled ? 'Aplicativo já instalado' : 'Instalar aplicativo';
+    const desiredText = alreadyInstalled ? 'Instalado' : 'Baixar no celular';
+
     button.classList.toggle('is-installed', alreadyInstalled);
-    button.setAttribute('aria-label', alreadyInstalled ? 'Rota Próxima já instalado' : 'Instalar Rota Próxima no celular');
-    button.title = alreadyInstalled ? 'Aplicativo já instalado' : 'Instalar aplicativo';
+    if (button.getAttribute('aria-label') !== desiredLabel) button.setAttribute('aria-label', desiredLabel);
+    if (button.title !== desiredTitle) button.title = desiredTitle;
+
     const text = button.querySelector('b');
-    if (text) text.textContent = alreadyInstalled ? 'Instalado' : 'Baixar no celular';
-    button.onclick = requestInstall;
+    if (text && text.textContent !== desiredText) text.textContent = desiredText;
+
+    if (button.onclick !== requestInstall) button.onclick = requestInstall;
+    return true;
+  }
+
+  function stopLoginObserver() {
+    if (!loginObserver) return;
+    loginObserver.disconnect();
+    loginObserver = null;
   }
 
   function patchLegacyLoginAccess() {
     const existing = document.getElementById('installMobileApp');
     if (existing) {
       syncInstallButton();
+      stopLoginObserver();
       return;
     }
 
@@ -121,8 +137,12 @@
     button.textContent = '📱';
     row.appendChild(button);
     syncInstallButton();
+    stopLoginObserver();
   }
 
-  new MutationObserver(patchLegacyLoginAccess).observe(document.documentElement, { childList: true, subtree: true });
+  // Observa apenas enquanto o botão legado ainda não existe. Assim que ele é
+  // encontrado/criado o observer é desligado, evitando qualquer ciclo de mutação.
+  loginObserver = new MutationObserver(patchLegacyLoginAccess);
+  loginObserver.observe(document.documentElement, { childList: true, subtree: true });
   patchLegacyLoginAccess();
 })();
