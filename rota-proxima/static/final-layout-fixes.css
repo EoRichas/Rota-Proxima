@@ -119,6 +119,145 @@ html[data-theme="dark"] #authScreen .cassola-login-backdrop::after {
     linear-gradient(64deg, transparent 0 70%, rgba(225, 181, 70, .06) 70.15% 70.32%, transparent 70.5% 100%);
 }
 
+/* 5) A foto aprovada do login deixa de depender do recorte por translateY.
+   O painel fotográfico recebe altura própria e usa object-position para manter
+   a caçamba como elemento principal, sem esconder quase toda a imagem. */
+@media (min-width: 821px) {
+  #authScreen .cassola-auth-visual {
+    min-height: 100dvh;
+  }
+
+  #authScreen .cassola-hero-photo {
+    flex: 1 1 430px;
+    min-height: clamp(360px, 46dvh, 560px);
+    max-height: none;
+    aspect-ratio: auto;
+    border-top: 1px solid rgba(20, 93, 67, .08);
+    background: #dcebe4;
+  }
+
+  #authScreen .cassola-hero-photo > img {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 76%;
+    transform: none !important;
+    filter: saturate(1.02) contrast(1.025);
+  }
+}
+
+/* 6) Cabeçalho das telas: título tem prioridade e os controles ficam em uma
+   coluna própria. Isso evita o topo achatado ou dominado pelos botões/filtros. */
+#appShell .page {
+  container-type: inline-size;
+  container-name: rp-page;
+}
+
+#appShell .page-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: clamp(18px, 2.2vw, 34px);
+  row-gap: 14px;
+  margin-bottom: clamp(20px, 2vw, 28px);
+}
+
+#appShell .page-head > div:first-child {
+  min-width: 0;
+  max-width: 860px;
+}
+
+#appShell .page-head h1 {
+  margin-bottom: 7px;
+  font-size: clamp(1.75rem, 2.25cqw, 2.35rem);
+  line-height: 1.08;
+  letter-spacing: -.03em;
+}
+
+#appShell .page-head .muted {
+  max-width: 760px;
+  margin-bottom: 0;
+  line-height: 1.5;
+}
+
+#appShell .page-head-actions {
+  justify-self: end;
+  align-self: start;
+  justify-content: flex-end;
+  max-width: min(48cqw, 660px);
+}
+
+/* 7) Editar e Excluir permanecem com as animações globais existentes, mas
+   voltam a parecer botões de ação sólidos e claramente clicáveis. */
+#appShell .list-item .actions .edit-pev {
+  opacity: 1;
+  color: #163d2f;
+  background: #eef4f1;
+  border: 1px solid #b8cbc2;
+  box-shadow: 0 2px 7px rgba(22, 61, 47, .10);
+}
+
+#appShell .list-item .actions .edit-pev:hover {
+  color: #0d3024;
+  background: #dfeae5;
+  border-color: #91ab9f;
+  box-shadow: 0 7px 16px rgba(22, 61, 47, .14);
+}
+
+#appShell .list-item .actions .delete-pev {
+  opacity: 1;
+  color: #fff;
+  background: #b42318;
+  border: 1px solid #8e1c14;
+  box-shadow: 0 3px 9px rgba(180, 35, 24, .20);
+}
+
+#appShell .list-item .actions .delete-pev:hover {
+  color: #fff;
+  background: #941b13;
+  border-color: #76160f;
+  box-shadow: 0 7px 17px rgba(148, 27, 19, .25);
+}
+
+html[data-theme="dark"] #appShell .list-item .actions .edit-pev {
+  color: #e8f3ed !important;
+  background: #22372e !important;
+  border-color: #426253 !important;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .22);
+}
+
+html[data-theme="dark"] #appShell .list-item .actions .edit-pev:hover {
+  color: #fff !important;
+  background: #2b483a !important;
+  border-color: #5c7c6d !important;
+}
+
+html[data-theme="dark"] #appShell .list-item .actions .delete-pev {
+  color: #fff !important;
+  background: #a92a22 !important;
+  border-color: #d05a50 !important;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .24);
+}
+
+html[data-theme="dark"] #appShell .list-item .actions .delete-pev:hover {
+  background: #c2362d !important;
+  border-color: #ec756b !important;
+}
+
+@container rp-page (max-width: 760px) {
+  #appShell .page-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #appShell .page-head-actions {
+    width: 100%;
+    max-width: none;
+    justify-self: stretch;
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 980px) {
   #appShell .main-area {
     grid-column: auto;
