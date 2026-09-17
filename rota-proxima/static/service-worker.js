@@ -1,6 +1,6 @@
 /* PWA com atualização segura: APIs sempre passam pela rede; a tela de login
    nunca fica presa em uma cópia antiga do cache. */
-const CACHE_NAME = 'rota-proxima-shell-20260916-11';
+const CACHE_NAME = 'rota-proxima-shell-20260917-2';
 const INDEX_CACHE_KEY = '/index.html';
 
 self.addEventListener('install', event => {
