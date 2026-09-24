@@ -626,3 +626,12 @@ hr { margin: 19px 0; border: 0; border-top: 1px solid var(--line); }
 }
 
 .pev-check input[type="time"] { min-width: 0; }
+
+/* Agenda comercial: mesmas listas do histórico, agrupadas pela data programada. */
+.agenda-days { display:grid; gap:16px; }
+.agenda-day { min-width:0; }
+.agenda-day-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.agenda-day-head h2 { margin:0; font-size:18px; }
+.agenda-day-head h2 span { font-size:14px; font-weight:400; }
+.agenda-day .list-item-main { min-width:0; overflow-wrap:anywhere; }
+.agenda-day .list-item { content-visibility:auto; contain-intrinsic-size:auto 100px; }
