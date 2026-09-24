@@ -38,7 +38,7 @@ const whatsHref = s => `https://wa.me/55${digits(s).replace(/^55/,'')}`;
 const statusLabel = {draft:'Rascunho',released:'Liberada',in_progress:'Em andamento',finished:'Finalizada',cancelled:'Cancelada'};
 const priorityLabel = {urgent:'Urgente',high:'Alta',normal:'Normal',low:'Baixa'};
 const serviceTypeLabel = {collection:'Coleta',delivery:'Entrega'};
-const roleLabel = {admin:'Administrador',commercial_manager:'Gerente Comercial',commercial:'Comercial',driver:'Motorista',production:'Produção'};
+const roleLabel = {admin:'Administrador',commercial_manager:'Gerente Comercial',commercial:'Comercial',driver:'Motorista',production:'Produção',quality:'Qualidade'};
 const requestStatusLabel = {pending:'Pendente',scheduled:'Em rota',in_service:'Em atendimento',completed:'Concluída',not_completed:'Não realizada',cancelled:'Cancelada'};
 const apiCache = new Map();
 const apiPending = new Map();
@@ -299,13 +299,14 @@ function enterApp(user) {
   if (user.must_change_password) setTimeout(() => openPasswordModal(true), 80);
   $('#mobileUserInitial').textContent = user.name.slice(0,1).toUpperCase();
   renderNav();
-  const initial = user.role === 'driver' ? 'driver' : user.role === 'production' ? 'production' : user.role === 'commercial' ? 'requests' : 'dashboard';
+  const initial = user.role === 'quality' ? 'history' : user.role === 'driver' ? 'driver' : user.role === 'production' ? 'production' : user.role === 'commercial' ? 'requests' : 'dashboard';
   go(initial);
 }
 
 function renderNav() {
   let items=[];
   if (state.user.role === 'driver') items=[['driver','Minha rota'],['history','Histórico']];
+  else if (state.user.role === 'quality') items=[['history','Histórico de rotas'],['reports','Relatório operacional']];
   else if (state.user.role === 'production') items=[['production','Pesagens']];
   else if (state.user.role === 'commercial') items=[['requests','Solicitações'],['pevs','PEVs / Locais'],['reports','Meu relatório']];
   else if (state.user.role === 'commercial_manager') items=[['dashboard','Dashboard'],['routes','Rotas'],['requests','Solicitações'],['reports','Relatório operacional'],['pevs','PEVs / Locais']];
@@ -315,6 +316,7 @@ function renderNav() {
 }
 
 async function go(page) {
+  if (state.user?.role === 'quality' && !['history','reports'].includes(page)) page = 'history';
   if (state.routeListTimer) { clearInterval(state.routeListTimer); state.routeListTimer = null; }
   if (state.userListTimer) { clearInterval(state.userListTimer); state.userListTimer = null; }
   state.page = page;
@@ -734,7 +736,7 @@ async function renderUsers(){
   if(state.userListTimer){clearInterval(state.userListTimer);state.userListTimer=null;}
   state.users=(await api('/api/users')).items;
   $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Administração</span><h1>Usuários</h1><p class="muted">Gerencie acessos sem apagar o histórico operacional.</p></div><button id="addUser" class="btn primary">+ Novo usuário</button></div>
-  <div class="card"><div class="toolbar"><input id="userSearch" class="search" placeholder="Pesquisar nome ou usuário"><select id="userRoleFilter"><option value="all">Todos os perfis</option><option value="admin">Administrador</option><option value="commercial">Comercial</option><option value="commercial_manager">Gerente Comercial</option><option value="driver">Motorista</option><option value="production">Produção</option></select></div><div id="userList"></div></div>`;
+  <div class="card"><div class="toolbar"><input id="userSearch" class="search" placeholder="Pesquisar nome ou usuário"><select id="userRoleFilter"><option value="all">Todos os perfis</option><option value="admin">Administrador</option><option value="commercial">Comercial</option><option value="commercial_manager">Gerente Comercial</option><option value="driver">Motorista</option><option value="production">Produção</option><option value="quality">Qualidade</option></select></div><div id="userList"></div></div>`;
   $('#addUser').onclick=openUserModal; $('#userSearch').oninput=drawUsers; $('#userRoleFilter').onchange=drawUsers; drawUsers();
   state.userListTimer=setInterval(async()=>{if(state.page!=='users')return;try{apiCache.delete('/api/users');state.users=(await api('/api/users',{timeoutMs:12000})).items||[];if(state.page==='users')drawUsers();}catch(_){}},20000);
 }
@@ -748,7 +750,7 @@ function drawUsers(){
   $$('.delete-user').forEach(b=>b.onclick=async()=>{if(!confirm('Excluir DEFINITIVAMENTE este usuário?\n\nO histórico operacional será preservado, mas o usuário perderá acesso imediatamente. Esta ação não pode ser desfeita.'))return;try{await api(`/api/users/${b.dataset.id}`,{method:'DELETE'});toast('Usuário excluído.','success');renderUsers();}catch(e){toast(e.message,'error')}});
 }
 function openUserModal(){
-  modal(`<form id="userForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Acesso</span><h2>Novo usuário</h2></div><button type="button" class="icon-btn modal-close">×</button></div><div class="form-grid"><label class="field"><span>Nome</span><input name="name" required></label><label class="field"><span>Usuário</span><input name="username" minlength="3" required></label><label class="field"><span>Senha inicial</span><input name="password" type="password" minlength="8" required><small class="muted">No primeiro acesso o usuário deverá trocar a senha.</small></label><label class="field"><span>Telefone</span><input name="phone" placeholder="(15) 99999-9999"></label><label class="field"><span>Perfil</span><select name="role"><option value="commercial">Comercial</option><option value="commercial_manager">Gerente Comercial</option><option value="driver">Motorista</option><option value="production">Produção</option><option value="admin">Administrador</option></select></label></div><div class="form-actions"><button type="button" class="btn ghost modal-close">Cancelar</button><button class="btn primary">Criar usuário</button></div></form>`);
+  modal(`<form id="userForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Acesso</span><h2>Novo usuário</h2></div><button type="button" class="icon-btn modal-close">×</button></div><div class="form-grid"><label class="field"><span>Nome</span><input name="name" required></label><label class="field"><span>Usuário</span><input name="username" minlength="3" required></label><label class="field"><span>Senha inicial</span><input name="password" type="password" minlength="8" required><small class="muted">No primeiro acesso o usuário deverá trocar a senha.</small></label><label class="field"><span>Telefone</span><input name="phone" placeholder="(15) 99999-9999"></label><label class="field"><span>Perfil</span><select name="role"><option value="commercial">Comercial</option><option value="commercial_manager">Gerente Comercial</option><option value="driver">Motorista</option><option value="production">Produção</option><option value="quality">Qualidade</option><option value="admin">Administrador</option></select></label></div><div class="form-actions"><button type="button" class="btn ghost modal-close">Cancelar</button><button class="btn primary">Criar usuário</button></div></form>`);
   $('#userForm').onsubmit=async e=>{e.preventDefault();try{await api('/api/users',{method:'POST',body:Object.fromEntries(new FormData(e.target))});$('#modal').close();toast('Usuário criado.','success');renderUsers();}catch(err){toast(err.message,'error')}};
 }
 function openEditUser(u){
@@ -762,8 +764,9 @@ function resetUserPassword(id){
 
 async function renderCollectionReport(){
   const now=new Date();const y=now.getFullYear(),m=String(now.getMonth()+1).padStart(2,'0'),d=String(now.getDate()).padStart(2,'0');const today=`${y}-${m}-${d}`,monthStart=`${y}-${m}-01`;
-  const management=['admin','commercial_manager'].includes(state.user.role);
-  if(management){try{[state.commercials,state.pevs]=await Promise.all([api('/api/commercials').then(x=>x.items||[]),api('/api/pevs').then(x=>x.items||[])]);}catch(e){state.commercials=[];state.pevs=[];}}
+  const management=['admin','commercial_manager','quality'].includes(state.user.role);
+  if(state.user.role==='quality'){const context=await api('/api/reports/collections/context');state.commercials=context.commercials;state.pevs=context.pevs;}
+  else if(management){try{[state.commercials,state.pevs]=await Promise.all([api('/api/commercials').then(x=>x.items||[]),api('/api/pevs').then(x=>x.items||[])]);}catch(e){state.commercials=[];state.pevs=[];}}
   $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Operação</span><h1>${management?'Relatório operacional':'Meu relatório'}</h1><p class="muted">${management?'Consulte e compare as carteiras comerciais por PEV, período e peso coletado.':'Consulte somente as operações das PEVs vinculadas à sua carteira comercial.'}</p></div><div class="page-head-actions"><button id="exportCollectionsPdf" class="btn primary">Exportar PDF profissional</button><button id="exportCollectionsXlsx" class="btn secondary">Exportar Excel (.xlsx)</button></div></div>
     <div class="card"><div class="toolbar report-toolbar"><label class="field compact"><span>De</span><input id="reportFrom" type="date" value="${monthStart}"></label><label class="field compact"><span>Até</span><input id="reportTo" type="date" value="${today}"></label>${management?`<label class="field compact"><span>Comercial</span><select id="reportCommercial"><option value="all">Todos</option>${state.commercials.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select></label>`:''}<label class="field compact"><span>PEV / Condomínio</span><select id="reportPev"><option value="all">Todos</option></select></label><label class="field compact"><span>Tipo</span><select id="reportServiceType"><option value="all">Todos</option><option value="collection">Coleta</option><option value="delivery">Entrega</option></select></label><label class="field compact"><span>Status</span><select id="reportStatus"><option value="all">Todos</option><option value="completed">Realizadas</option><option value="failed">Não realizadas</option><option value="pending">Pendentes</option><option value="arrived">No local</option></select></label><button id="loadCollectionsReport" class="btn primary">Atualizar período</button></div></div>
     <div id="collectionReportContent"></div>`;
@@ -804,7 +807,7 @@ function openFailModal(stop,route){
 
 async function renderHistory(){
   const routes=(await api('/api/routes')).items.filter(r=>r.status==='finished');
-  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Motorista</span><h1>Histórico</h1></div></div><div class="card">${routeListHtml(routes)}</div>`; bindRouteOpeners();
+  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">${state.user.role==='quality'?'Qualidade':'Motorista'}</span><h1>Histórico de rotas</h1><p class="muted">Consulta das rotas finalizadas.</p></div></div><div class="card">${routeListHtml(routes)}</div>`; bindRouteOpeners();
 }
 
 

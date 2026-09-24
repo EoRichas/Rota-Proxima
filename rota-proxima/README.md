@@ -6,6 +6,7 @@ Sistema para planejamento e execução de rotas de coleta. Nesta versão, o **Su
 - **Administrador:** controle total. Dashboard, solicitações, planejamento/liberação de rotas, PEVs, recorrentes, usuários, atividades e configurações.
 - **Comercial:** cadastra/edita PEVs/locais e cria/edita/cancela as próprias solicitações pendentes.
 - **Gerente Comercial:** somente consulta Dashboard, Rotas, Solicitações e PEVs/Locais.
+- **Qualidade:** consulta somente o histórico de rotas finalizadas e o relatório operacional. Publicação e permissões em [QUALIDADE.md](QUALIDADE.md).
 - **Motorista:** vê e executa apenas as rotas atribuídas a ele.
 
 ## Primeiro acesso

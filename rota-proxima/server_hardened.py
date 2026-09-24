@@ -163,7 +163,7 @@ class HardenedProductionHandler(_BASE_HANDLER):
 
         match = re.fullmatch(r'/api/routes/(\d+)/last-location-address', path)
         if match:
-            user = self.require_user(('admin', 'commercial_manager'))
+            user = self.require_user(('admin', 'commercial_manager', 'quality'))
             if not user:
                 return
             token = self.token()
@@ -175,6 +175,9 @@ class HardenedProductionHandler(_BASE_HANDLER):
             }))
             if not route:
                 return self.send_json({'error': 'Rota não encontrada'}, 404)
+
+            if user['role'] == 'quality' and route.get('status') != 'finished':
+                return self.send_json({'error': 'Rota finalizada não encontrada'}, 404)
 
             rows = rota.Supa.get('driver_location_updates', token, {
                 'route_id': f'eq.{route_id}',

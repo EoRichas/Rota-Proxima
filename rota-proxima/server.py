@@ -1057,22 +1057,32 @@ class AppHandler(BaseHTTPRequestHandler):
                 if role!='production':return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json({'items':production_weighing_items(t)})
             if path=='/api/routes':
-                if role in ('commercial','production'):return self.send_json({'error':'Sem permissão'},403)
+                if role not in ('admin','commercial_manager','driver','quality'):return self.send_json({'error':'Sem permissão'},403)
                 params={'select':'*,profiles!routes_driver_id_fkey(name),route_stops(id,status)','order':'route_date.desc,id.desc'}
                 if role=='driver':params['driver_id']=f'eq.{u["id"]}'
+                if role=='quality':params['status']='eq.finished'
                 if q.get('date'):params['route_date']=f'eq.{q["date"][0]}'
                 rows=Supa.get('routes',t,params);items=[]
                 for x in rows:
                     pr=x.pop('profiles',{}) or {};st=x.pop('route_stops',[]) or [];x.pop('origin_json',None);items.append({**x,'driver_name':pr.get('name',''),'completed_stops':sum(1 for z in st if z['status'] in ('completed','failed','skipped')),'total_stops':len(st)})
                 return self.send_json({'items':items})
             if path.startswith('/api/routes/') and len(path.strip('/').split('/'))==3:
-                if role in ('commercial','production'):return self.send_json({'error':'Sem permissão'},403)
-                rid=int(path.rsplit('/',1)[-1]);r=get_route_full(t,rid)
+                if role not in ('admin','commercial_manager','driver','quality'):return self.send_json({'error':'Sem permissão'},403)
+                rid=int(path.rsplit('/',1)[-1])
+                if role=='quality':
+                    finished=first(Supa.get('routes',t,{'id':f'eq.{rid}','status':'eq.finished','select':'id'}))
+                    if not finished:return self.send_json({'error':'Rota finalizada não encontrada'},404)
+                r=get_route_full(t,rid)
                 if not r:return self.send_json({'error':'Rota não encontrada'},404)
                 if role=='driver' and r['driver_id']!=u['id']:return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json(r)
+            if path=='/api/reports/collections/context':
+                if role not in ('admin','commercial_manager','quality'):return self.send_json({'error':'Sem permissão'},403)
+                commercials=Supa.get('profiles',t,{'role':'eq.commercial','active':'eq.true','select':'id,name','order':'name.asc'})
+                pevs=Supa.get('pevs',t,{'deleted_at':'is.null','active':'eq.true','select':'id,commercial_owner_id'})
+                return self.send_json({'commercials':commercials or [],'pevs':pevs or []})
             if path in ('/api/reports/collections','/api/reports/collections/pdf','/api/reports/collections/xlsx'):
-                if role not in ('admin','commercial_manager','commercial'):return self.send_json({'error':'Sem permissão'},403)
+                if role not in ('admin','commercial_manager','commercial','quality'):return self.send_json({'error':'Sem permissão'},403)
                 date_from=(q.get('from') or [''])[0].strip();date_to=(q.get('to') or [''])[0].strip()
                 if not date_from or not date_to:return self.send_json({'error':'Informe o período do relatório'},400)
                 try:
@@ -1081,16 +1091,17 @@ class AppHandler(BaseHTTPRequestHandler):
                 if d1>d2:return self.send_json({'error':'A data inicial não pode ser maior que a final'},400)
                 if (d2-d1).days>366:return self.send_json({'error':'O período máximo do relatório é de 367 dias'},400)
                 items=collection_report_items(t,date_from,date_to)
+                if role=='quality':items=[item for item in items if item.get('route_status')!='draft']
                 requested_commercial=(q.get('commercial') or ['all'])[0]
-                effective_commercial=requested_commercial if role in ('admin','commercial_manager') else str(u['id'])
+                effective_commercial=requested_commercial if role in ('admin','commercial_manager','quality') else str(u['id'])
                 # O isolamento do Comercial ocorre no servidor. Alterar a query ou
                 # chamar a API diretamente nunca libera registros de outra carteira.
                 if role=='commercial':items=filter_collection_report(items,commercial=effective_commercial)
                 if path.endswith('/pdf') or path.endswith('/xlsx'):
                     commercial_name=u.get('name','') if role=='commercial' else ''
-                    portfolio=commercial_portfolio_summary(t) if role in ('admin','commercial_manager') else {}
-                    if role in ('admin','commercial_manager') and effective_commercial!='all': commercial_name=(portfolio.get(str(effective_commercial)) or {}).get('name','')
-                    filters={'status':(q.get('status') or ['all'])[0],'service_type':(q.get('service_type') or ['all'])[0],'q':(q.get('q') or [''])[0],'pev':(q.get('pev') or ['all'])[0],'route':(q.get('route') or ['all'])[0],'commercial':effective_commercial,'commercial_name':commercial_name,'show_comparison':role in ('admin','commercial_manager'),'portfolio':portfolio}
+                    portfolio=commercial_portfolio_summary(t) if role in ('admin','commercial_manager','quality') else {}
+                    if role in ('admin','commercial_manager','quality') and effective_commercial!='all': commercial_name=(portfolio.get(str(effective_commercial)) or {}).get('name','')
+                    filters={'status':(q.get('status') or ['all'])[0],'service_type':(q.get('service_type') or ['all'])[0],'q':(q.get('q') or [''])[0],'pev':(q.get('pev') or ['all'])[0],'route':(q.get('route') or ['all'])[0],'commercial':effective_commercial,'commercial_name':commercial_name,'show_comparison':role in ('admin','commercial_manager','quality'),'portfolio':portfolio}
                     items=filter_collection_report(items,filters['status'],filters['service_type'],filters['q'],filters['pev'],filters['route'],filters['commercial'])
                     if path.endswith('/pdf'):
                         raw=build_collections_pdf(items,date_from,date_to,filters)
@@ -1145,6 +1156,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 edge('change-own-password',data,t)
                 with _AUTH_CACHE_LOCK:_AUTH_CACHE.pop(t,None)
                 return self.send_json({'ok':True})
+            if role=='quality':return self.send_json({'error':'Perfil Qualidade permite somente consulta'},403)
             if path=='/api/users' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 d=edge('create-user',data,t);return self.send_json(d,201)
