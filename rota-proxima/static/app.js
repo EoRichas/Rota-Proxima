@@ -308,7 +308,7 @@ function renderNav() {
   if (state.user.role === 'driver') items=[['driver','Minha rota'],['history','Histórico']];
   else if (state.user.role === 'quality') items=[['history','Histórico de rotas'],['reports','Relatório operacional']];
   else if (state.user.role === 'production') items=[['production','Pesagens']];
-  else if (state.user.role === 'commercial') items=[['requests','Solicitações'],['pevs','PEVs / Locais'],['reports','Meu relatório']];
+  else if (state.user.role === 'commercial') items=[['requests','Solicitações'],['agenda','Agenda'],['pevs','PEVs / Locais'],['reports','Meu relatório']];
   else if (state.user.role === 'commercial_manager') items=[['dashboard','Dashboard'],['routes','Rotas'],['requests','Solicitações'],['reports','Relatório operacional'],['pevs','PEVs / Locais']];
   else items=[['dashboard','Dashboard'],['requests','Solicitações'],['planner','Planejar rota'],['pevs','PEVs / Locais'],['routes','Rotas'],['users','Usuários'],['reports','Relatório operacional'],['settings','Configurações']];
   $('#nav').innerHTML = items.map(([id,label]) => `<button data-page="${id}">${label}</button>`).join('');
@@ -327,6 +327,7 @@ async function go(page) {
     if (page === 'planner') return await renderPlanner();
     if (page === 'pevs') return await renderPevs();
     if (page === 'requests') return await renderRequests();
+    if (page === 'agenda') return await renderAgenda();
     if (page === 'routes') return await renderRoutes();
     if (page === 'users') return await renderUsers();
     if (page === 'reports') return await renderCollectionReport();
@@ -803,6 +804,66 @@ async function renderDriverHome(){
 function openFailModal(stop,route){
   modal(`<form id="failForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Parada ${stop.sequence}</span><h2>Não foi possível realizar</h2></div><button type="button" class="icon-btn modal-close">×</button></div><label class="field"><span>Motivo</span><select name="reason"><option>Local fechado</option><option>Responsável ausente</option><option>Material indisponível</option><option>Endereço incorreto</option><option>Outro</option></select></label><label class="field" style="margin-top:12px"><span>Observação</span><textarea name="note"></textarea></label><div class="form-actions"><button type="button" class="btn ghost modal-close">Cancelar</button><button class="btn danger">Registrar</button></div></form>`);
   $('#failForm').onsubmit=async e=>{e.preventDefault();try{const pos=await getPosition();const body={...Object.fromEntries(new FormData(e.target)),...pos};const updated=await api(`/api/stops/${stop.id}/fail`,{method:'POST',body});$('#modal').close();toast(updated.status==='finished'?'Ocorrência registrada. Rota finalizada automaticamente.':'Ocorrência registrada.','success');drawDriverRoute(updated);}catch(err){toast(err.message,'error');}};
+}
+
+function agendaStatus(item) {
+  if (item.status === 'completed') return ['finished','Realizada'];
+  if (item.status === 'failed' || item.status === 'skipped') return ['failed','Não realizada'];
+  if (item.status === 'arrived') return ['in_progress','No local'];
+  if (item.route_status === 'draft') return ['draft','Planejada'];
+  if (item.route_status === 'in_progress') return ['in_progress','Em rota'];
+  return ['released','Agendada'];
+}
+
+function agendaListHtml(items, search='') {
+  const query=search.trim().toLocaleLowerCase('pt-BR');
+  const filtered=items.filter(item=>`${item.pev_name} ${item.city} ${item.route_name}`.toLocaleLowerCase('pt-BR').includes(query));
+  if (!filtered.length) return '<div class="card empty">Nenhum agendamento encontrado para suas PEVs neste período.</div>';
+  const days=new Map();
+  for (const item of filtered) {
+    if (!days.has(item.route_date)) days.set(item.route_date,[]);
+    days.get(item.route_date).push(item);
+  }
+  return [...days.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([date,visits])=>{
+    const weekday=new Intl.DateTimeFormat('pt-BR',{weekday:'long'}).format(new Date(`${date}T12:00:00`));
+    return `<section class="card agenda-day"><div class="agenda-day-head"><h2>${fmtDate(date)} <span class="muted">• ${esc(weekday)}</span></h2><span class="muted">${visits.length} ${visits.length===1?'agendamento':'agendamentos'}</span></div><div class="list">${visits.map(item=>{
+      const [badge,label]=agendaStatus(item);
+      const time=item.exact_time?`Horário previsto: ${String(item.exact_time).slice(0,5)}`:item.window_start&&item.window_end?`Janela: ${String(item.window_start).slice(0,5)} às ${String(item.window_end).slice(0,5)}`:item.window_start?`A partir de ${String(item.window_start).slice(0,5)}`:item.window_end?`Até ${String(item.window_end).slice(0,5)}`:'Horário não definido';
+      return `<div class="list-item"><div class="list-item-main"><strong>${esc(item.pev_name)}</strong><span>${esc(serviceTypeLabel[item.service_type]||'Coleta')} • ${esc(time)}</span><span>${esc(item.route_name)}${item.city?` • ${esc(item.city)}/${esc(item.state)}`:''}</span></div><span class="badge ${badge}">${label}</span></div>`;
+    }).join('')}</div></section>`;
+  }).join('');
+}
+
+async function renderAgenda() {
+  if (state.user?.role !== 'commercial') throw new Error('Sem permissão para acessar a Agenda.');
+  const today=new Date();
+  const month=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`;
+  const lastDay=new Date(today.getFullYear(),today.getMonth()+1,0).getDate();
+  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Comercial • ${esc(state.user.name)}</span><h1>Agenda</h1><p class="muted">Datas programadas nas rotas para as PEVs da sua carteira.</p></div></div>
+    <div class="card"><form id="agendaFilters" class="toolbar report-toolbar"><label class="field compact"><span>De</span><input id="agendaFrom" type="date" value="${month}-01" required></label><label class="field compact"><span>Até</span><input id="agendaTo" type="date" value="${month}-${lastDay}" required></label><button id="agendaRefresh" class="btn primary" type="submit">Consultar</button><label class="field report-search"><span>Pesquisar PEV ou rota</span><input id="agendaSearch" type="search" placeholder="Nome da PEV, cidade ou rota"></label></form><p class="muted">Planejada: rota ainda não liberada. Agendada: rota liberada para o motorista.</p></div>
+    <div id="agendaResults" class="agenda-days" aria-live="polite"></div>`;
+  const form=$('#agendaFilters'),from=$('#agendaFrom'),to=$('#agendaTo'),search=$('#agendaSearch'),button=$('#agendaRefresh'),results=$('#agendaResults');
+  let items=[];
+  const draw=()=>{results.innerHTML=agendaListHtml(items,search.value);};
+  const load=async()=>{
+    if (button.disabled) return;
+    if (!from.value || !to.value || from.value>to.value) {toast('Informe um período válido.','error');return;}
+    const qs=new URLSearchParams({from:from.value,to:to.value});
+    button.disabled=true;search.disabled=true;from.disabled=true;to.disabled=true;
+    results.innerHTML='<div class="card empty">Carregando agendamentos...</div>';
+    try {
+      items=(await api(`/api/agenda?${qs}`)).items||[];
+      if (state.page!=='agenda' || !results.isConnected) return;
+      draw();
+    } catch (error) {
+      if (error?.status===401) throw error;
+      items=[];
+      if (state.page==='agenda' && results.isConnected) results.innerHTML=`<div class="warning" role="alert">${esc(error.message||'Não foi possível carregar a agenda.')} Clique em Consultar para tentar novamente.</div>`;
+    } finally {button.disabled=false;search.disabled=false;from.disabled=false;to.disabled=false;}
+  };
+  form.onsubmit=async event=>{event.preventDefault();try{await load();}catch(error){if(error?.status===401)await go('agenda');else toast(error.message,'error');}};
+  search.oninput=draw;
+  await load();
 }
 
 async function renderHistory(){

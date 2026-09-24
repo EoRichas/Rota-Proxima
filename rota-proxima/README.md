@@ -4,7 +4,7 @@ Sistema para planejamento e execução de rotas de coleta. Nesta versão, o **Su
 
 ## Perfis
 - **Administrador:** controle total. Dashboard, solicitações, planejamento/liberação de rotas, PEVs, recorrentes, usuários, atividades e configurações.
-- **Comercial:** cadastra/edita PEVs/locais e cria/edita/cancela as próprias solicitações pendentes.
+- **Comercial:** cadastra/edita PEVs/locais, cria/edita/cancela as próprias solicitações pendentes e consulta a Agenda das PEVs da sua carteira.
 - **Gerente Comercial:** somente consulta Dashboard, Rotas, Solicitações e PEVs/Locais.
 - **Qualidade:** consulta somente o histórico de rotas finalizadas e o relatório operacional. Publicação e permissões em [QUALIDADE.md](QUALIDADE.md).
 - **Motorista:** vê e executa apenas as rotas atribuídas a ele.
@@ -60,6 +60,14 @@ O Comercial pode informar:
 - observações internas.
 
 O horário específico não altera o cadastro permanente do PEV. Ao iniciar ou recalcular a rota, o sistema considera a hora real e tenta encaixar a parada no compromisso; se houver incompatibilidade, exibe alerta.
+
+## Agenda comercial
+
+Em **Comercial → Agenda**, cada usuário consulta as visitas das PEVs vinculadas à sua carteira, agrupadas pela data programada na rota. Agendamentos criados pelo Administrador também aparecem para o comercial responsável pelo PEV. Solicitações ainda sem rota permanecem em Solicitações.
+
+A tela permite consultar um período e pesquisar por PEV, cidade ou rota. Mostra serviço, horário previsto ou janela e situação: Planejada (rascunho), Agendada (liberada), Em rota, No local, Realizada ou Não realizada. Rotas canceladas ficam fora da Agenda. A consulta é somente leitura e considera o responsável atual pelo PEV.
+
+O endpoint `GET /api/agenda?from=AAAA-MM-DD&to=AAAA-MM-DD` usa o ID do usuário autenticado, filtra as paradas pelos PEVs da carteira e mantém as políticas RLS existentes. Não exige migração do banco nem alteração da função de administração de usuários.
 
 ## Segurança e controle
 - RLS no Supabase por perfil.

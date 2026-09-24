@@ -261,6 +261,47 @@ def optimize_order_with_exact_times(dist,durations,priorities,exact_times,start_
     return order,warnings
 
 
+def commercial_agenda_items(token, commercial_id, date_from, date_to):
+    """Agenda pela data da rota e pela carteira atual, não pelo solicitante."""
+    params = {
+        'select': 'id,sequence,status,service_type,exact_time,window_start,window_end,'
+                  'pevs!inner(id,name,city,state,commercial_owner_id),'
+                  'routes!inner(id,name,route_date,status)',
+        'pevs.commercial_owner_id': f'eq.{commercial_id}',
+        'routes.and': f'(route_date.gte.{date_from},route_date.lte.{date_to})',
+        'routes.status': 'in.(draft,released,in_progress,finished)',
+        'order': 'route_id.asc,sequence.asc,id.asc',
+        'limit': '500',
+    }
+    items = []
+    offset = 0
+    while True:
+        rows = Supa.get('route_stops', token, {**params, 'offset': str(offset)}) or []
+        for stop in rows:
+            pev, route = stop.get('pevs') or {}, stop.get('routes') or {}
+            # Defesa adicional: a carteira é sempre definida pelo usuário autenticado.
+            if str(pev.get('commercial_owner_id')) != str(commercial_id):
+                continue
+            if route.get('status') not in ('draft','released','in_progress','finished'):
+                continue
+            if not date_from <= str(route.get('route_date') or '') <= date_to:
+                continue
+            items.append({
+                'id': stop['id'], 'sequence': stop.get('sequence'),
+                'status': stop.get('status'), 'service_type': stop.get('service_type'),
+                'exact_time': stop.get('exact_time'),
+                'window_start': stop.get('window_start'), 'window_end': stop.get('window_end'),
+                'pev_id': pev['id'], 'pev_name': pev.get('name') or 'PEV',
+                'city': pev.get('city') or '', 'state': pev.get('state') or '',
+                'route_id': route['id'], 'route_name': route.get('name') or 'Rota',
+                'route_date': route['route_date'], 'route_status': route['status'],
+            })
+        if len(rows) < 500:
+            break
+        offset += len(rows)
+    return sorted(items, key=lambda x: (x['route_date'], x['route_id'], x['sequence'] or 0, x['id']))
+
+
 def collection_report_items(token,date_from,date_to):
     routes=Supa.get('routes',token,{
         'select':'id,name,route_date,status,driver_id,profiles!routes_driver_id_fkey(name)',
@@ -1053,6 +1094,19 @@ class AppHandler(BaseHTTPRequestHandler):
                 for x in rows:
                     p=x.pop('pevs',{}) or {};pr=x.pop('profiles',{}) or {};r=x.pop('routes',{}) or {};items.append({**x,**{k:p.get(k) for k in ['street','number','district','city','state','cep','contact_name','contact_role','phone']},'pev_name':p.get('name'),'requested_by_name':pr.get('name'),'route_name':r.get('name')})
                 return self.send_json({'items':items})
+            if path=='/api/agenda':
+                if role!='commercial':return self.send_json({'error':'Sem permissão'},403)
+                date_from=(q.get('from') or [''])[0].strip()
+                date_to=(q.get('to') or [''])[0].strip()
+                try:
+                    d1=datetime.strptime(date_from,'%Y-%m-%d').date()
+                    d2=datetime.strptime(date_to,'%Y-%m-%d').date()
+                    if d1.isoformat()!=date_from or d2.isoformat()!=date_to:raise ValueError()
+                except ValueError:
+                    return self.send_json({'error':'Informe as datas inicial e final válidas'},400)
+                if d1>d2:return self.send_json({'error':'A data inicial não pode ser maior que a final'},400)
+                if (d2-d1).days>366:return self.send_json({'error':'Selecione um período de até 367 dias'},400)
+                return self.send_json({'items':commercial_agenda_items(t,u['id'],date_from,date_to)})
             if path=='/api/production-weighings':
                 if role!='production':return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json({'items':production_weighing_items(t)})
