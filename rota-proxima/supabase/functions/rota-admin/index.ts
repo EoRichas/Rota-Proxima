@@ -18,7 +18,7 @@ const headers = {
 const send = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers })
 const username = (value: unknown) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '')
 const emailFor = (user: string) => `${username(user)}@users.rotaproxima.app`
-const allowedRoles = ['admin', 'commercial', 'commercial_manager', 'driver', 'production']
+const allowedRoles = ['admin', 'commercial', 'commercial_manager', 'driver', 'production', 'quality']
 
 async function actor(req: Request) {
   const authorization = req.headers.get('Authorization') || ''
