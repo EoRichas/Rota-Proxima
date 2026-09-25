@@ -815,16 +815,19 @@ function agendaStatus(item) {
   return ['released','Agendada'];
 }
 
-function agendaListHtml(items, search='') {
+function agendaListHtml(items, search='', status='all') {
   const query=search.trim().toLocaleLowerCase('pt-BR');
-  const filtered=items.filter(item=>`${item.pev_name} ${item.city} ${item.route_name}`.toLocaleLowerCase('pt-BR').includes(query));
-  if (!filtered.length) return '<div class="card empty">Nenhum agendamento encontrado para suas PEVs neste período.</div>';
+  const filtered=items.filter(item=>{
+    const matchesStatus=status==='completed'?item.status==='completed':status==='scheduled'?!['completed','failed','skipped'].includes(item.status):true;
+    return matchesStatus && `${item.pev_name} ${item.city} ${item.route_name}`.toLocaleLowerCase('pt-BR').includes(query);
+  });
+  if (!filtered.length) return '<div class="card empty">Nenhum agendamento encontrado para suas PEVs com os filtros selecionados.</div>';
   const days=new Map();
   for (const item of filtered) {
     if (!days.has(item.route_date)) days.set(item.route_date,[]);
     days.get(item.route_date).push(item);
   }
-  return [...days.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([date,visits])=>{
+  return [...days.entries()].sort(([a],[b])=>b.localeCompare(a)).map(([date,visits])=>{
     const weekday=new Intl.DateTimeFormat('pt-BR',{weekday:'long'}).format(new Date(`${date}T12:00:00`));
     return `<section class="card agenda-day"><div class="agenda-day-head"><h2>${fmtDate(date)} <span class="muted">• ${esc(weekday)}</span></h2><span class="muted">${visits.length} ${visits.length===1?'agendamento':'agendamentos'}</span></div><div class="list">${visits.map(item=>{
       const [badge,label]=agendaStatus(item);
@@ -840,16 +843,16 @@ async function renderAgenda() {
   const month=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`;
   const lastDay=new Date(today.getFullYear(),today.getMonth()+1,0).getDate();
   $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">Comercial • ${esc(state.user.name)}</span><h1>Agenda</h1><p class="muted">Datas programadas nas rotas para as PEVs da sua carteira.</p></div></div>
-    <div class="card"><form id="agendaFilters" class="toolbar report-toolbar"><label class="field compact"><span>De</span><input id="agendaFrom" type="date" value="${month}-01" required></label><label class="field compact"><span>Até</span><input id="agendaTo" type="date" value="${month}-${lastDay}" required></label><button id="agendaRefresh" class="btn primary" type="submit">Consultar</button><label class="field report-search"><span>Pesquisar PEV ou rota</span><input id="agendaSearch" type="search" placeholder="Nome da PEV, cidade ou rota"></label></form><p class="muted">Planejada: rota ainda não liberada. Agendada: rota liberada para o motorista.</p></div>
+    <div class="card"><form id="agendaFilters" class="agenda-filters"><label class="field compact"><span>De</span><input id="agendaFrom" type="date" value="${month}-01" required></label><label class="field compact"><span>Até</span><input id="agendaTo" type="date" value="${month}-${lastDay}" required></label><label class="field"><span>Situação</span><select id="agendaStatusFilter"><option value="all">Todos</option><option value="scheduled">Agendado</option><option value="completed">Realizado</option></select></label><label class="field agenda-search"><span>Pesquisar PEV ou rota</span><input id="agendaSearch" type="search" placeholder="Nome da PEV, cidade ou rota"></label><div class="agenda-filter-actions"><button id="agendaRefresh" class="btn primary" type="submit">Consultar</button></div></form><p class="muted">Planejada: rota ainda não liberada. Agendada: rota liberada para o motorista.</p></div>
     <div id="agendaResults" class="agenda-days" aria-live="polite"></div>`;
-  const form=$('#agendaFilters'),from=$('#agendaFrom'),to=$('#agendaTo'),search=$('#agendaSearch'),button=$('#agendaRefresh'),results=$('#agendaResults');
+  const form=$('#agendaFilters'),from=$('#agendaFrom'),to=$('#agendaTo'),search=$('#agendaSearch'),statusFilter=$('#agendaStatusFilter'),button=$('#agendaRefresh'),results=$('#agendaResults');
   let items=[];
-  const draw=()=>{results.innerHTML=agendaListHtml(items,search.value);};
+  const draw=()=>{results.innerHTML=agendaListHtml(items,search.value,statusFilter.value);};
   const load=async()=>{
     if (button.disabled) return;
     if (!from.value || !to.value || from.value>to.value) {toast('Informe um período válido.','error');return;}
     const qs=new URLSearchParams({from:from.value,to:to.value});
-    button.disabled=true;search.disabled=true;from.disabled=true;to.disabled=true;
+    button.disabled=true;search.disabled=true;statusFilter.disabled=true;from.disabled=true;to.disabled=true;
     results.innerHTML='<div class="card empty">Carregando agendamentos...</div>';
     try {
       items=(await api(`/api/agenda?${qs}`)).items||[];
@@ -859,10 +862,11 @@ async function renderAgenda() {
       if (error?.status===401) throw error;
       items=[];
       if (state.page==='agenda' && results.isConnected) results.innerHTML=`<div class="warning" role="alert">${esc(error.message||'Não foi possível carregar a agenda.')} Clique em Consultar para tentar novamente.</div>`;
-    } finally {button.disabled=false;search.disabled=false;from.disabled=false;to.disabled=false;}
+    } finally {button.disabled=false;search.disabled=false;statusFilter.disabled=false;from.disabled=false;to.disabled=false;}
   };
   form.onsubmit=async event=>{event.preventDefault();try{await load();}catch(error){if(error?.status===401)await go('agenda');else toast(error.message,'error');}};
   search.oninput=draw;
+  statusFilter.onchange=draw;
   await load();
 }
 
