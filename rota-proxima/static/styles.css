@@ -636,8 +636,9 @@ hr { margin: 19px 0; border: 0; border-top: 1px solid var(--line); }
 .agenda-day .list-item-main { min-width:0; overflow-wrap:anywhere; }
 .agenda-day .list-item { content-visibility:auto; contain-intrinsic-size:auto 100px; }
 
-.agenda-filters { display:grid; grid-template-columns:repeat(3,minmax(130px,1fr)) minmax(200px,2fr); gap:14px; align-items:end; }
-.agenda-filter-actions { grid-column:1/-1; display:flex; justify-content:center; }
-.agenda-filter-actions .btn { min-width:130px; }
-@media(max-width:1000px) { .agenda-filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media(max-width:480px) { .agenda-filters { grid-template-columns:minmax(0,1fr); } }
+/* Mantém a busca e Consultar juntos, alinhados pela base dos campos. */
+.agenda-filters { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; }
+.agenda-filters > .field { flex:1 1 130px; max-width:160px; }
+.agenda-search-controls { display:flex; align-items:flex-end; gap:12px; flex:1 1 340px; max-width:440px; min-width:0; }
+.agenda-search-controls .agenda-search { flex:1; min-width:0; }
+.agenda-search-controls .btn { flex:none; min-width:105px; min-height:42px; height:42px; }
