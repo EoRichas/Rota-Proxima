@@ -26,11 +26,11 @@ test('Agenda entra somente no menu Comercial',()=>{
   ctx.renderNav();assert.equal(nodes.get('#nav').innerHTML.includes('data-page="agenda"'),role==='commercial');
  }
 });
-test('agrupa por data programada em ordem cronológica',()=>{
+test('agrupa por data programada em ordem decrescente',()=>{
  const {ctx}=fixture();
  const html=ctx.agendaListHtml([row(),row({id:2,route_date:'2026-09-24',pev_name:'PEV anterior'}),row({id:3})]);
  assert.equal((html.match(/<section/g)||[]).length,2);
- assert.ok(html.indexOf('24/09/2026')<html.indexOf('25/09/2026'));
+ assert.ok(html.indexOf('25/09/2026')<html.indexOf('24/09/2026'));
  assert.match(html,/2 agendamentos/);
 });
 test('situações de agendamento e execução têm nomes distintos',()=>{
@@ -73,4 +73,27 @@ test('falha de consulta limpa resultado e permite tentar novamente',async()=>{
 test('perfil sem permissão não dispara consulta',async()=>{
  const {ctx,calls}=fixture({role:'quality'});
  await assert.rejects(ctx.renderAgenda(),/Sem permissão/);assert.equal(calls.length,0);
+});
+
+test('filtra agendados e realizados sem confundir ocorrências com conclusão',()=>{
+ const {ctx}=fixture();
+ const rows=[row({pev_name:'Pendente'}),row({pev_name:'Planejada',route_status:'draft'}),row({pev_name:'Em execução',status:'arrived'}),row({pev_name:'Concluída',status:'completed'}),row({pev_name:'Falhou',status:'failed'}),row({pev_name:'Ignorada',status:'skipped'})];
+ const scheduled=ctx.agendaListHtml(rows,'','scheduled');
+ assert.match(scheduled,/Pendente/);assert.match(scheduled,/Planejada/);assert.match(scheduled,/Em execução/);
+ assert.doesNotMatch(scheduled,/Concluída|Falhou|Ignorada/);
+ const completed=ctx.agendaListHtml(rows,'','completed');
+ assert.match(completed,/Concluída/);assert.doesNotMatch(completed,/Pendente|Planejada|Em execução|Falhou|Ignorada/);
+ assert.match(ctx.agendaListHtml(rows,'','all'),/Falhou/);
+ assert.match(ctx.agendaListHtml(rows,'Pendente','completed'),/Nenhum agendamento/);
+});
+test('alterar situação combina pesquisa e atualiza a lista sem nova requisição',async()=>{
+ const {ctx,nodes,calls}=fixture({items:[row({pev_name:'PEV pendente'}),row({pev_name:'PEV concluída',status:'completed'})]});
+ ctx.$('#agendaFrom').value='2026-09-01';ctx.$('#agendaTo').value='2026-09-30';
+ await ctx.renderAgenda();
+ const filter=nodes.get('#agendaStatusFilter');filter.value='completed';filter.onchange();
+ assert.match(nodes.get('#agendaResults').innerHTML,/PEV concluída/);
+ assert.doesNotMatch(nodes.get('#agendaResults').innerHTML,/PEV pendente/);
+ nodes.get('#agendaSearch').value='pendente';nodes.get('#agendaSearch').oninput();
+ assert.match(nodes.get('#agendaResults').innerHTML,/Nenhum agendamento/);
+ assert.equal(calls.length,1);assert.equal(filter.disabled,false);
 });

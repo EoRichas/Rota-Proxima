@@ -635,3 +635,9 @@ hr { margin: 19px 0; border: 0; border-top: 1px solid var(--line); }
 .agenda-day-head h2 span { font-size:14px; font-weight:400; }
 .agenda-day .list-item-main { min-width:0; overflow-wrap:anywhere; }
 .agenda-day .list-item { content-visibility:auto; contain-intrinsic-size:auto 100px; }
+
+.agenda-filters { display:grid; grid-template-columns:repeat(3,minmax(130px,1fr)) minmax(200px,2fr); gap:14px; align-items:end; }
+.agenda-filter-actions { grid-column:1/-1; display:flex; justify-content:center; }
+.agenda-filter-actions .btn { min-width:130px; }
+@media(max-width:1000px) { .agenda-filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:480px) { .agenda-filters { grid-template-columns:minmax(0,1fr); } }
