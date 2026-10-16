@@ -65,5 +65,5 @@
       "schedule": "0 6 * * *"
     }
   ],
-  "installCommand": "python -m pip install -r requirements.txt"
+  "installCommand": ""
 }

@@ -6,6 +6,8 @@ Esta PR prepara a migração. Ela não troca o serviço de produção nem remove
 
 Importe `EoRichas/Rota-Proxima` e selecione **Root Directory: `rota-proxima`**, Framework **Other**. A configuração `vercel.json` publica somente os arquivos de `static/` e direciona `/api/*` ao mesmo handler Python de produção, em `api/index.py`. A região configurada é São Paulo (`gru1`).
 
+Em **Build and Output Settings**, use Build Command `python scripts/build_static.py`, Output Directory `public` e Install Command vazio (Override ativado). O `vercel.json` define `installCommand: ""` para pular a instalação de dependências do frontend. O build estático usa apenas a biblioteca padrão. As dependências de `requirements.txt` são instaladas automaticamente pelo builder das funções Python em `api/`; não execute `pip install` no Python global gerenciado pela Vercel.
+
 Configure as variáveis da `.env.example` em Preview e Production. Use um projeto Supabase de homologação no Preview: os previews podem fazer escritas quando alguém utilizar o sistema. Não copie dados reais para fixtures ou para a PR.
 
 - `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY`: projeto correto do Rota.
