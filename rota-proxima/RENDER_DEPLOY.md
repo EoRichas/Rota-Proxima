@@ -8,7 +8,7 @@ Esta pasta está preparada para rodar como **Web Service Python** no Render.
 - usa automaticamente a variável `PORT` fornecida pelo Render;
 - `render.yaml` incluído;
 - build: `pip install -r requirements.txt`;
-- start: `python server.py`;
+- start: `python server_final.py`;
 - health check: `/api/health`;
 - cookies de autenticação ficam `Secure` em HTTPS;
 - banco continua sendo o Supabase de São Paulo;

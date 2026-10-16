@@ -99,12 +99,13 @@
 
   function enforceRequestOnlyPlannerRules() {
     const selector = document.getElementById('pevSelector');
+    const selected = document.getElementById('selectedPevs');
     if (!selector || typeof state === 'undefined') return;
 
     const selectedRequests = state.requestSelection || [];
     const requestByPev = new Map(selectedRequests.map(r => [Number(r.pev_id), r]));
 
-    selector.querySelectorAll('.pev-check').forEach(row => {
+    [...selector.querySelectorAll('.pev-check'),...(selected?.querySelectorAll('.pev-check')||[])].forEach(row => {
       const service = row.querySelector('.pev-service-type');
       const priority = row.querySelector('.pev-priority');
       const exact = row.querySelector('.pev-exact-time');

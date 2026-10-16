@@ -79,6 +79,25 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
         status_code=200,
     )
 
+
+@app.route(route="evidence-download-link", methods=["POST"])
+def evidence_download_link(req: func.HttpRequest) -> func.HttpResponse:
+    """Short-lived Graph download URL; protected by the Azure Function key."""
+    try:
+        item_id = str(req.get_json().get('item_id') or '').strip()
+        drive_id = os.environ.get('SHAREPOINT_DRIVE_ID', '')
+        if not item_id or not drive_id:
+            return func.HttpResponse(json.dumps({'error': 'Arquivo inválido'}), status_code=400)
+        item = _graph('GET', f'/drives/{quote(drive_id,safe="")}/items/{quote(item_id,safe="")}', _token())
+        url = item.get('@microsoft.graph.downloadUrl')
+        if not url:
+            raise ValueError('Arquivo sem endereço de download')
+        return func.HttpResponse(json.dumps({'download_url': url}), mimetype='application/json',
+                                 headers={'Cache-Control': 'no-store'})
+    except Exception:
+        return func.HttpResponse(json.dumps({'error': 'Não foi possível recuperar a evidência'}),
+                                 status_code=502, mimetype='application/json')
+
 @app.route(route="upload-rota-pev", methods=["POST"])
 def upload_rota_pev(req: func.HttpRequest) -> func.HttpResponse:
     try:

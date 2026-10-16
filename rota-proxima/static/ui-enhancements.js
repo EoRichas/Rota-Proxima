@@ -120,7 +120,7 @@
     if (!input || input.dataset.creationDateFixed === '1') return;
     const now = new Date();
     const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-    input.value = local;
+    if (!input.value) input.value = local;
     input.dataset.creationDateFixed = '1';
     const name = document.getElementById('routeName');
     if (name && /^Rota\s+\d{1,2}\/\d{1,2}\/\d{4}$/.test(name.value.trim())) {

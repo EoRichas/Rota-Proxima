@@ -18,7 +18,7 @@ def collection_report_items_without_drafts(token, date_from, date_to):
 
 
 rota.collection_report_items = collection_report_items_without_drafts
-rota.BUILD_ID = 'STATUS-REPORT-LOCATION-SECURITY-2026-09-15'
+rota.BUILD_ID = 'ROUTES-PRECISION-VERCEL-2026-10-16'
 
 
 if __name__ == '__main__':

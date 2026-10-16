@@ -117,3 +117,17 @@ O endpoint `GET /api/agenda?from=AAAA-MM-DD&to=AAAA-MM-DD` usa o ID do usuário 
 
 ### Limitação de uso no celular
 Em rede local HTTP (`http://IP-DO-PC:8080`), alguns navegadores bloqueiam GPS por não ser HTTPS. A execução básica da rota continua possível, mas funções que exigem localização atual (como recalcular a partir da posição do motorista) podem depender de HTTPS.
+
+
+## Atualização de planejamento e operação — outubro/2026
+
+- Seleções do planejador ficam visíveis no topo, inclusive quando outra pesquisa está ativa.
+- PEV novo ou sem tambor recebe Entrega por padrão. O Admin pode corrigir a situação no cadastro; atendimento concluído confirma tambor no local. A migração preserva PEVs já atendidos como instalados.
+- Um botão calcula a sequência pelas ruas e um botão cria o rascunho. O planejamento considera horário de saída, tempo de atendimento e compromissos. Até 12 paradas sem janelas usa solução exata; acima disso usa busca de múltiplas sequências com melhoria local. Não garante trânsito ao vivo ou acesso de caminhões.
+- Motorista pode arrastar as paradas pendentes ou usar as setas do teclado. A ordem é salva no banco, com auditoria e proteção contra alteração simultânea. Admin pode ajustar rotas liberadas/em andamento.
+- Consultas extensas são paginadas; relatórios consultam rotas em grupos para evitar URLs excessivas.
+- Backup operacional em ZIP inclui dados, fotos e hashes; referências ausentes são reportadas como erro, sem sucesso parcial.
+- Sessões existentes voltam a ser consultadas no servidor ao abrir a página.
+- SharePoint utiliza fila persistente com reserva e novas tentativas; originais são preservados por padrão.
+
+Publicação e variáveis: [VERCEL_DEPLOY.md](VERCEL_DEPLOY.md). Estado do schema histórico: [supabase/DATABASE.md](supabase/DATABASE.md). A entrada local/Render continua `python server_final.py`.

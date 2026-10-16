@@ -6,9 +6,9 @@ const index = fs.readFileSync(new URL('index.html', root), 'utf8');
 const css = fs.readFileSync(new URL('responsive-layout-fix.css', root), 'utf8');
 const app = fs.readFileSync(new URL('app.js', root), 'utf8');
 
-const loginFix = index.indexOf('/login-visual-fix.css');
+const loginFix = index.indexOf('/login-connected.css');
 const responsiveFix = index.indexOf('/responsive-layout-fix.css');
-assert.ok(loginFix >= 0 && responsiveFix > loginFix, 'a camada responsiva deve ser carregada depois dos estilos de login');
+assert.ok(loginFix >= 0 && loginFix > responsiveFix, 'a camada responsiva deve ser carregada depois dos estilos de login');
 assert.match(css, /\.modal-box\s*\{[\s\S]*?width:\s*100%;[\s\S]*?max-width:\s*100%;/);
 assert.match(css, /#pevForm \.form-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
 assert.match(css, /@media\s*\(max-width:\s*980px\)[\s\S]*?#pevForm \.form-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/);

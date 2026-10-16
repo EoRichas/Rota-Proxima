@@ -37,9 +37,9 @@ class RenderPerformanceTests(unittest.TestCase):
 
     def test_repeat_visits_use_cached_application_shell(self):
         worker = (ROOT / 'static' / 'service-worker.js').read_text(encoding='utf-8')
-        self.assertIn("caches.match(e.request,{ignoreSearch:true})", worker)
-        self.assertIn("e.request.mode==='navigate'", worker)
-        self.assertIn("caches.match('/index.html')", worker)
+        self.assertIn("cache.match(request)", worker)
+        self.assertIn("request.mode === 'navigate'", worker)
+        self.assertIn("caches.match(INDEX_CACHE_KEY)", worker)
 
     def test_refresh_token_is_not_requested_twice_in_sequence(self):
         backend = (ROOT / 'server.py').read_text(encoding='utf-8')
