@@ -5,6 +5,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import requests
+import routing
 from requests.adapters import HTTPAdapter
 
 BASE_DIR=Path(__file__).resolve().parent
@@ -13,7 +14,8 @@ HOST=os.environ.get('ROTA_HOST','0.0.0.0')
 # Render define PORT automaticamente (padrao 10000). Localmente continua 8080.
 PORT=int(os.environ.get('PORT') or os.environ.get('ROTA_PORT','8080'))
 IS_RENDER=os.environ.get('RENDER','').strip().lower()=='true'
-FORCE_SECURE_COOKIES=IS_RENDER or os.environ.get('FORCE_SECURE_COOKIES','').strip().lower() in ('1','true','yes','on')
+IS_VERCEL=os.environ.get('VERCEL','')=='1'
+FORCE_SECURE_COOKIES=IS_RENDER or IS_VERCEL or os.environ.get('FORCE_SECURE_COOKIES','').strip().lower() in ('1','true','yes','on')
 SUPABASE_URL=os.environ.get('SUPABASE_URL','https://uufkwqdsixvuhiyoyyyy.supabase.co').rstrip('/')
 SUPABASE_KEY=os.environ.get('SUPABASE_PUBLISHABLE_KEY','').strip()
 REST=f'{SUPABASE_URL}/rest/v1'
@@ -161,7 +163,7 @@ def geocode_address_detailed(addr):
     result=None;source=None;confirmed=False
     try:
         result=_nominatim_search(precise)
-        if result is not None: source='nominatim_address'; confirmed=bool(addr.get('street') and addr.get('number') and addr.get('city'))
+        if result is not None: source='nominatim_address'; confirmed=False
     except Exception: result=None
     if result is None and generic!=precise:
         try:
@@ -190,18 +192,33 @@ def build_fallback_matrix(points):
     return d,t,'haversine'
 
 def osrm_matrix(points):
-    coords=';'.join(f'{p[1]:.6f},{p[0]:.6f}' for p in points)
+    if len(points)>101:raise ValueError('Selecione até 100 PEVs por rota.')
+    for lat,lng in points:
+        if not math.isfinite(lat) or not math.isfinite(lng) or not (-90<=lat<=90 and -180<=lng<=180):
+            raise ValueError('Coordenada inválida. Revise o cadastro do PEV.')
+    coords=';'.join(f'{p[1]:.7f},{p[0]:.7f}' for p in points)
+    base=os.environ.get('OSRM_URL','https://router.project-osrm.org').rstrip('/')
     try:
-        d=fetch_json(f'https://router.project-osrm.org/table/v1/driving/{coords}?annotations=distance,duration',timeout=20)
-        if d.get('code')=='Ok' and d.get('distances') and d.get('durations'): return d['distances'],d['durations'],'osrm'
-    except: pass
-    return build_fallback_matrix(points)
+        data=fetch_json(f'{base}/table/v1/driving/{coords}?annotations=distance,duration',timeout=25)
+    except requests.RequestException as exc:
+        raise SupaHTTPError(503,'Serviço de roteamento indisponível',
+            'Não foi possível calcular o trajeto pelas ruas. Tente novamente; nenhuma estimativa em linha reta foi aplicada.') from exc
+    if data.get('code')!='Ok' or not data.get('distances') or not data.get('durations'):
+        raise ValueError('O serviço de vias não encontrou trajetos. Confira as coordenadas dos PEVs.')
+    n=len(points)
+    dist,dur=data['distances'],data['durations']
+    if len(dist)!=n or len(dur)!=n or any(len(row)!=n for row in dist+dur):
+        raise ValueError('O serviço de vias retornou uma matriz incompleta.')
+    for index,waypoint in enumerate(data.get('sources') or []):
+        if float(waypoint.get('distance') or 0)>300:
+            raise ValueError(f'Ponto {index}: coordenada a mais de 300 m da via. Confirme a entrada do local no cadastro.')
+    return dist,dur,'osrm'
 
 def route_cost(order,dist,priorities,return_origin=False):
     total=0;prev=0;legs=[]
     for i in order:
-        x=dist[prev][i] or 0;legs.append(x);total+=x;prev=i
-    if return_origin and order: total+=dist[prev][0] or 0
+        x=routing.edge(dist,prev,i);legs.append(x);total+=x;prev=i
+    if return_origin and order: total+=routing.edge(dist,prev,0)
     avg=max(1,sum(legs)/len(legs) if legs else 1)
     for pos,i in enumerate(order):
         p=priorities.get(i,'normal')
@@ -232,33 +249,8 @@ def hhmm_to_minutes(v):
         return h*60+m if 0<=h<24 and 0<=m<60 else None
     except:return None
 
-def optimize_order_with_exact_times(dist,durations,priorities,exact_times,start_minute,mode='best'):
-    if start_minute is None or not exact_times:return optimize_order(dist,priorities,False,mode),[]
-    remaining=set(range(1,len(dist)));timed=[]
-    for idx,val in exact_times.items():
-        m=hhmm_to_minutes(val)
-        if m is not None and idx in remaining: timed.append((m,idx,val))
-    timed.sort();timed_ids={x[1] for x in timed};order=[];warnings=[];cur=0;clock=float(start_minute)
-    for appt,idx,label in timed:
-        if idx not in remaining:continue
-        while True:
-            choices=[]
-            for i in remaining:
-                if i==idx or i in timed_ids:continue
-                t1=(durations[cur][i] or 10**12)/60;t2=(durations[i][idx] or 10**12)/60
-                if clock+t1+t2<=appt-5:
-                    score=(dist[cur][i] or 10**12)*PRIORITY_FACTOR.get(priorities.get(i,'normal'),1)
-                    choices.append((score,i,t1))
-            if not choices:break
-            _,pick,t1=min(choices);clock+=t1;order.append(pick);remaining.remove(pick);cur=pick
-        arr=clock+(durations[cur][idx] or 0)/60
-        if arr>appt+2:
-            hh=int(arr//60)%24;mm=int(arr%60);warnings.append(f'Compromisso {label}: previsão {hh:02d}:{mm:02d}, com atraso estimado.')
-        clock=max(arr,appt);order.append(idx);remaining.remove(idx);cur=idx
-    while remaining:
-        nxt=min(remaining,key=lambda i:(dist[cur][i] or 10**12)*PRIORITY_FACTOR.get(priorities.get(i,'normal'),1))
-        clock+=(durations[cur][nxt] or 0)/60;order.append(nxt);remaining.remove(nxt);cur=nxt
-    return order,warnings
+def optimize_order_with_exact_times(dist,durations,priorities,exact_times,start_minute,mode='best',windows=None,service_minutes=10):
+    return routing.optimize(dist,durations,priorities,exact_times,start_minute,windows,service_minutes,mode)
 
 
 def commercial_agenda_items(token, commercial_id, date_from, date_to):
@@ -310,12 +302,16 @@ def collection_report_items(token,date_from,date_to):
     })
     if not routes:return []
     route_map={int(r['id']):r for r in routes};ids=','.join(str(x) for x in route_map)
-    stops=Supa.get('route_stops',token,{
-        'route_id':f'in.({ids})',
-        'select':'id,route_id,pev_id,request_id,sequence,status,service_type,exact_time,arrived_at,completed_at,failure_reason,driver_note,collected_weight_kg,pevs(name,street,number,district,city,state,cep,contact_name,phone,commercial_owner_id,profiles!pevs_commercial_owner_id_fkey(id,name)),scheduling_requests(requested_by,profiles!scheduling_requests_requested_by_fkey(name))',
-        'order':'route_id.desc,sequence.asc'
-    })
-    weighing_rows=Supa.get('route_weighings',token,{'route_id':f'in.({ids})','select':'stop_id,weight_kg'}) or []
+    stops=[];weighing_rows=[]
+    route_ids=list(route_map)
+    for start in range(0,len(route_ids),100):
+        ids=','.join(str(x) for x in route_ids[start:start+100])
+        stops.extend(Supa.get('route_stops',token,{
+            'route_id':f'in.({ids})',
+            'select':'id,route_id,pev_id,request_id,sequence,status,service_type,exact_time,arrived_at,completed_at,failure_reason,driver_note,collected_weight_kg,pevs(name,street,number,district,city,state,cep,contact_name,phone,commercial_owner_id,profiles!pevs_commercial_owner_id_fkey(id,name)),scheduling_requests(requested_by,profiles!scheduling_requests_requested_by_fkey(name))',
+            'order':'route_id.desc,sequence.asc'
+        }) or [])
+        weighing_rows.extend(Supa.get('route_weighings',token,{'route_id':f'in.({ids})','select':'stop_id,weight_kg'}) or [])
     weight_by_stop={int(w['stop_id']):w.get('weight_kg') for w in weighing_rows if w.get('stop_id') is not None}
     items=[]
     for st in stops:
@@ -641,7 +637,17 @@ class Supa:
         if not r.text:return None
         return r.json()
     @staticmethod
-    def get(table,token,params=None):return Supa.req('GET',table,token,params=params)
+    def get(table,token,params=None):
+        params=dict(params or {})
+        if 'limit' in params:
+            return Supa.req('GET',table,token,params=params)
+        params.setdefault('order','id.asc')
+        offset=int(params.pop('offset',0));rows=[]
+        while True:
+            page=Supa.req('GET',table,token,params={**params,'limit':'500','offset':str(offset)}) or []
+            rows.extend(page)
+            if len(page)<500:return rows
+            offset+=len(page)
     @staticmethod
     def insert(table,token,body):return Supa.req('POST',table,token,body=body,prefer='return=representation')
     @staticmethod
@@ -682,6 +688,10 @@ def upload_evidence(token, data_url, path_prefix):
         except:msg=r.text
         raise RuntimeError(msg or 'Falha ao salvar foto')
     return path
+
+def finalize_evidence_upload(token,evidence,data_url,path_prefix):
+    """Production entry points replace this hook with durable SharePoint sync."""
+    return None
 
 def route_weighings(token,route_id):
     return Supa.get('route_weighings',token,{'route_id':f'eq.{route_id}','select':'id,route_id,stop_id,pev_id,weight_kg,evidence_id,created_at','order':'created_at.asc'}) or []
@@ -835,10 +845,10 @@ def reorder_route_for_exact_times(token,route_id,start_lat=None,start_lng=None,l
             points.append(ensure_pev_coords(token,p))
     dist,dur,_=osrm_matrix(points);pri={i+1:pending[i].get('priority','normal') for i in range(len(pending))};exact={i+1:pending[i].get('exact_time') for i in range(len(pending)) if pending[i].get('exact_time')}
     order,warnings=optimize_order_with_exact_times(dist,dur,pri,exact,hhmm_to_minutes(local_time),'best')
-    fixed=len(route['stops'])-len(pending);prev=0;updates=[]
+    slots=sorted(st['sequence'] for st in pending);prev=0;updates=[]
     for pos,idx in enumerate(order,start=1):
         st=pending[idx-1]
-        updates.append({'id':st['id'],'sequence':fixed+pos,'planned_distance_m':dist[prev][idx] or 0,'planned_duration_s':dur[prev][idx] or 0})
+        updates.append({'id':st['id'],'sequence':slots[pos-1],'planned_distance_m':dist[prev][idx] or 0,'planned_duration_s':dur[prev][idx] or 0})
         prev=idx
     Supa.rpc('apply_stop_reorder',token,{'p_route_id':route_id,'p_updates':updates})
     return warnings
@@ -854,7 +864,9 @@ class AppHandler(BaseHTTPRequestHandler):
     def route_path(self):return urllib.parse.urlparse(self.path).path
     def query(self):return urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
     def read_json(self):
-        n=int(self.headers.get('Content-Length','0') or 0);return json.loads(self.rfile.read(n).decode() or '{}') if n else {}
+        n=int(self.headers.get('Content-Length','0') or 0)
+        if n<0 or n>4_000_000:raise ValueError('Arquivo acima do limite. Reduza a imagem e tente novamente.')
+        return json.loads(self.rfile.read(n).decode() or '{}') if n else {}
     def cookies(self):
         c=SimpleCookie();c.load(self.headers.get('Cookie',''));return {k:v.value for k,v in c.items()}
     def is_secure_request(self):
@@ -1167,12 +1179,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 if role not in ('admin','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
                 data=Supa.rpc('dashboard_summary',t) or {}
                 return self.send_json(data)
-            if path=='/api/backup':
-                if role!='admin':return self.send_json({'error':'Sem permissão'},403)
-                dump={}
-                for table in ['settings','profiles','pevs','scheduling_requests','routes','route_stops','audit_logs']:
-                    dump[table]=Supa.get(table,t,{'select':'*','order':'id.asc'} if table not in ('settings','profiles') else {'select':'*'})
-                return self.send_json({'exported_at':now_iso(),'data':dump})
+            if path.startswith('/api/backup'):
+                import operations
+                return operations.backup_endpoint(self,path,u,t,q)
             return self.send_json({'error':'Endpoint não encontrado'},404)
         except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError) as e:
             self._client_disconnected(e)
@@ -1192,6 +1201,11 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         except Exception as e:return self.send_json({'error':f'JSON inválido: {e}'},400)
         try:
+            if path=='/api/evidence-sync/retry' and method=='POST':
+                u=self.require_user(('admin',))
+                if not u:return
+                import server_sharepoint
+                return self.send_json(server_sharepoint.retry_pending(self.token(),limit=3,reset_errors=True))
             if path=='/api/setup' and method=='POST':return self.send_json(edge('setup',data),201)
             if path=='/api/login' and method=='POST':
                 d=edge('login',data);device_id=self.request_device_id();self.set_auth_headers(d['access_token'],d['refresh_token'],device_id);mark_user_presence(d['user'].get('id'),device_id);return self.send_json({'user':d['user']})
@@ -1236,12 +1250,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     result=Supa.rpc('delete_user_force',t,{'p_user_id':uid});return self.send_json(result or {'ok':True})
             if path=='/api/pevs' and method=='POST':
                 if role not in ('admin','commercial','commercial_manager'):return self.send_json({'error':'Sem permissão'},403)
-                if len(path.strip('/').split('/'))>3 and path.strip('/').split('/')[3]=='confirm-location' and method=='POST':
-                    if role!='admin':return self.send_json({'error':'Sem permissão'},403)
-                    row=first(Supa.get('pevs',t,{'id':f'eq.{pid}','select':'id,lat,lng'}));
-                    if not row or row.get('lat') is None or row.get('lng') is None:return self.send_json({'error':'PEV sem coordenadas para confirmar'},409)
-                    Supa.update('pevs',t,{'id':f'eq.{pid}'},{'location_confirmed':True});audit(t,u,'confirm_location','pev',pid,'Localização da PEV confirmada manualmente');return self.send_json({'ok':True})
                 pev_data=dict(data)
+                drum_installed=pev_data.pop('drum_installed',None)
                 for temporary_field in ('service_start','service_end','notes','internal_notes'):pev_data.pop(temporary_field,None)
                 prepared_geo=None
                 if role=='commercial_manager' and not (pev_data.get('lat') and pev_data.get('lng')):
@@ -1266,6 +1276,8 @@ class AppHandler(BaseHTTPRequestHandler):
                         try:
                             saved=first(Supa.get('pevs',t,{'id':f'eq.{new_id}','select':'*'}));geo=geocode_pev_and_persist(t,saved) if saved else None
                         except Exception as e: print('[PEV GEOCODE WARNING]',e)
+                if new_id and role=='admin' and isinstance(drum_installed,bool):
+                    Supa.rpc('set_pev_drum_status',t,{'p_pev_id':new_id,'p_installed':drum_installed})
                 return self.send_json({'id':new_id,'geocode':geo},201)
             if path=='/api/pevs/geocode-missing' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
@@ -1278,6 +1290,13 @@ class AppHandler(BaseHTTPRequestHandler):
                 return self.send_json({'ok':True,'updated':updated,'failed':failed})
             if path.startswith('/api/pevs/'):
                 pid=int(path.strip('/').split('/')[2])
+                if path.endswith('/confirm-location') and method=='POST':
+                    if role!='admin':return self.send_json({'error':'Sem permissão'},403)
+                    row=first(Supa.get('pevs',t,{'id':f'eq.{pid}','select':'id,lat,lng'}))
+                    if not row or row.get('lat') is None or row.get('lng') is None:return self.send_json({'error':'PEV sem coordenadas para confirmar'},409)
+                    Supa.update('pevs',t,{'id':f'eq.{pid}'},{'location_confirmed':True})
+                    audit(t,u,'confirm_location','pev',pid,'Entrada do PEV confirmada manualmente')
+                    return self.send_json({'ok':True})
                 if role not in ('admin','commercial'):return self.send_json({'error':'Sem permissão'},403)
                 old=first(Supa.get('pevs',t,{'id':f'eq.{pid}','select':'*'}));
                 if not old:return self.send_json({'error':'PEV não encontrado'},404)
@@ -1286,12 +1305,15 @@ class AppHandler(BaseHTTPRequestHandler):
                     Supa.update('pevs',t,{'id':f'eq.{pid}'},{'active':True,'deleted_at':None,'deleted_by':None});audit(t,u,'restore','pev',pid,'PEV restaurado');return self.send_json({'ok':True})
                 if method=='PUT':
                     pev_data=dict(data)
+                    drum_installed=pev_data.pop('drum_installed',None)
                     for temporary_field in ('service_start','service_end','notes','internal_notes'):pev_data.pop(temporary_field,None)
                     print(f'[PEV SAVE] build={BUILD_ID} via rpc/save_pev update id={pid}')
                     Supa.rpc('save_pev',t,{'p_id':pid,'p_data':pev_data});geo=None
                     try:
                         saved=first(Supa.get('pevs',t,{'id':f'eq.{pid}','select':'*'}));geo=geocode_pev_and_persist(t,saved,force=not (pev_data.get('lat') and pev_data.get('lng'))) if saved else None
                     except Exception as e: print('[PEV GEOCODE WARNING]',e)
+                    if role=='admin' and isinstance(drum_installed,bool):
+                        Supa.rpc('set_pev_drum_status',t,{'p_pev_id':pid,'p_installed':drum_installed})
                     return self.send_json({'ok':True,'geocode':geo})
                 if method=='DELETE':
                     reason=str(data.get('reason','')).strip()
@@ -1326,10 +1348,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 for pid in ids:
                     if pid in pm:items.append(pm[pid]);points.append(ensure_pev_coords(t,pm[pid]))
                 dist,dur,source=osrm_matrix(points);meta={int(x['pev_id']):x for x in data.get('stops') or []};legacy_pri=data.get('priorities') or {};pri={i+1:meta.get(p['id'],{}).get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal') for i,p in enumerate(items)};exact={i+1:meta.get(p['id'],{}).get('exact_time') for i,p in enumerate(items) if meta.get(p['id'],{}).get('exact_time')}
-                order,warnings=optimize_order_with_exact_times(dist,dur,pri,exact,hhmm_to_minutes(data.get('start_time')),data.get('mode','best'));prev=0;totald=totalt=0;st=[]
+                windows={i+1:(meta.get(p['id'],{}).get('window_start'),meta.get(p['id'],{}).get('window_end')) for i,p in enumerate(items)}
+                order,warnings=optimize_order_with_exact_times(dist,dur,pri,exact,hhmm_to_minutes(data.get('start_time')),data.get('mode','best'),windows,data.get('service_minutes',10));prev=0;totald=totalt=0;st=[]
                 for seq,idx in enumerate(order,1):
                     p=items[idx-1];m=meta.get(p['id'],{});d=dist[prev][idx] or 0;du=dur[prev][idx] or 0;totald+=d;totalt+=du;prev=idx;st.append({**p,'pev':p,'pev_id':p['id'],'sequence':seq,'priority':m.get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal'),'service_type':validated_service_type(m.get('service_type')),'window_start':m.get('window_start') or '','window_end':m.get('window_end') or '','exact_time':m.get('exact_time') or '','request_id':m.get('request_id'),'distance_m':d,'duration_s':du})
-                return self.send_json({'origin':origin,'stops':st,'total_distance_m':totald,'total_duration_s':totalt,'source':source,'schedule_warnings':warnings})
+                return self.send_json({'origin':origin,'stops':st,'total_distance_m':totald,'total_duration_s':totalt,'source':source,'schedule_warnings':warnings,'unconfirmed_pevs':[p['name'] for p in items if not p.get('location_confirmed')]})
             if path=='/api/routes' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 driver=str(data.get('driver_id',''));date=data.get('route_date')
@@ -1353,6 +1376,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 return self.send_json(get_route_full(t,rid),201)
             if path.startswith('/api/routes/'):
                 parts=path.strip('/').split('/');rid=int(parts[2]);action=parts[3] if len(parts)>3 else None
+                if action=='reorder' and method=='POST':
+                    if role not in ('admin','driver'):return self.send_json({'error':'Sem permissão'},403)
+                    import operations
+                    return self.send_json(operations.reorder_route(t,u,rid,data))
                 if action=='release' and method=='POST':
                     if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                     changed=Supa.update('routes',t,{'id':f'eq.{rid}','status':'eq.draft'},{'status':'released','released_at':now_iso(),'released_by':u['id']})
@@ -1365,8 +1392,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     Supa.update('routes',t,{'id':f'eq.{rid}'},{'status':'in_progress','started_at':now_iso(),'started_lat':data.get('lat'),'started_lng':data.get('lng')})
                     try:
                         warnings=reorder_route_for_exact_times(t,rid,data.get('lat'),data.get('lng'),data.get('local_time',''))
-                    except Exception as re:
-                        print('[ROUTE START REORDER WARNING]',re);warnings=['Rota iniciada. Não foi possível recalcular a ordem automaticamente; mantenha a sequência planejada.']
+                    except Exception as reorder_error:
+                        print('[ROUTE START REORDER WARNING]',reorder_error);warnings=['Rota iniciada. Não foi possível recalcular a ordem automaticamente; mantenha a sequência planejada.']
                     audit(t,u,'start','route',rid,'Motorista iniciou a rota',None,None,{'schedule_warnings':warnings});x=get_route_full(t,rid);x['schedule_warnings']=warnings;return self.send_json(x)
                 if action=='recalculate' and method=='POST':
                     if role!='driver':return self.send_json({'error':'Sem permissão'},403)
@@ -1406,6 +1433,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     if existing:return self.send_json({'error':'Esta foto obrigatória já foi registrada'},409)
                     storage_path=upload_evidence(t,data.get('image_data'),f'rota-{route_id}/pev-{stop["pev_id"]}/{evtype}')
                     ev=first(Supa.insert('route_evidences',t,{'route_id':route_id,'stop_id':sid,'pev_id':stop['pev_id'],'evidence_type':evtype,'storage_path':storage_path,'created_by':u['id']}))
+                    finalize_evidence_upload(t,ev,data.get('image_data'),f'rota-{route_id}/pev-{stop["pev_id"]}/{evtype}')
                     audit(t,u,'evidence','stop',sid,'Evidência fotográfica registrada',None,None,{'evidence_type':evtype,'storage_path':storage_path})
                     return self.send_json({'ok':True,'evidence':ev})
                 if action=='admin-resolve':
@@ -1439,6 +1467,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 if Supa.get('route_weighings',t,{'stop_id':f'eq.{stop_id}','select':'id','limit':'1'}):return self.send_json({'error':'Esta coleta já possui pesagem'},409)
                 storage_path=upload_evidence(t,data.get('image_data'),f'rota-{rid}/pev-{stop["pev_id"]}/weighing_scale')
                 ev=first(Supa.insert('route_evidences',t,{'route_id':rid,'stop_id':stop_id,'pev_id':stop['pev_id'],'evidence_type':'weighing_scale','storage_path':storage_path,'created_by':u['id']}))
+                finalize_evidence_upload(t,ev,data.get('image_data'),f'rota-{rid}/pev-{stop["pev_id"]}/weighing_scale')
                 Supa.insert('route_weighings',t,{'route_id':rid,'stop_id':stop_id,'pev_id':stop['pev_id'],'weight_kg':weight,'evidence_id':ev['id'],'created_by':u['id']})
                 audit(t,u,'weighing','route',rid,f'Pesagem registrada: {weight:.3f} kg',None,None,{'stop_id':stop_id,'pev_id':stop['pev_id'],'weight_kg':weight})
                 remaining=production_weighing_items(t)

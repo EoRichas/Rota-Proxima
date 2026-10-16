@@ -3,178 +3,68 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
-
-
-ROOT = Path(__file__).resolve().parents[1]
+from unittest.mock import Mock,patch
+ROOT=Path(__file__).resolve().parents[1]
 
 
 def load_sharepoint_backend():
-    fake_server = types.ModuleType('server')
-    fake_server.upload_evidence = lambda *_args, **_kwargs: 'storage/original.jpg'
-    fake_server.AppHandler = type('AppHandler', (), {})
-    fake_server.BUILD_ID = 'test'
-    fake_server.HTTP = types.SimpleNamespace()
-    fake_server.Supa = types.SimpleNamespace()
-    fake_server.first = lambda rows: rows[0] if rows else None
-    fake_server.now_iso = lambda: '2026-08-21T12:00:00+00:00'
-    fake_server.main = lambda: None
-
-    module_name = 'server_sharepoint_context_test'
-    previous_server = sys.modules.get('server')
-    sys.modules['server'] = fake_server
+    fake=types.ModuleType('server')
+    fake.upload_evidence=lambda *_:'rota-8/pev-13/weighing_scale/foto.jpg'
+    fake.AppHandler=type('AppHandler',(),{})
+    fake.Supa=types.SimpleNamespace(rpc=Mock())
+    fake.HTTP=types.SimpleNamespace()
+    fake.first=lambda rows:rows[0] if rows else None
+    fake.now_iso=lambda:'2026-10-16T12:00:00+00:00'
+    prior=sys.modules.get('server');sys.modules['server']=fake
     try:
-        spec = importlib.util.spec_from_file_location(module_name, ROOT / 'server_sharepoint.py')
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        return module
+        spec=importlib.util.spec_from_file_location('sharepoint_test',ROOT/'server_sharepoint.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
     finally:
-        if previous_server is None:
-            sys.modules.pop('server', None)
-        else:
-            sys.modules['server'] = previous_server
-        sys.modules.pop(module_name, None)
+        if prior is None:sys.modules.pop('server',None)
+        else:sys.modules['server']=prior
 
 
-class SharePointContextCaptureTests(unittest.TestCase):
+class SharePointDurabilityTests(unittest.TestCase):
     def setUp(self):
-        self.backend = load_sharepoint_backend()
-        self.context = {
-            'route_id': 8,
-            'route_name': 'Rota 21/08/2026',
-            'pev_id': 13,
-            'pev_name': 'EMEIEF Izabel Fernandes Pedroso',
-            'evidence_type': 'weighing_scale',
-            'year': '2026',
-            'month': 8,
-        }
+        self.backend=load_sharepoint_backend()
+        self.context={'route_id':8,'route_name':'Rota correta','pev_id':13,'pev_name':'Nome correto','evidence_type':'weighing_scale','year':'2026','month':10}
+        self.evidence={'id':99,'storage_path':'rota-8/pev-13/weighing_scale/foto.jpg','sync_context':self.context}
 
-    def test_context_is_frozen_before_upload_evidence_returns(self):
-        events = []
-        captured = {}
+    def test_context_is_persisted_after_evidence_insert_before_processing(self):
+        self.backend.rota.Supa.rpc.side_effect=[None,[self.evidence]]
+        with patch.object(self.backend,'AZURE_FUNCTION_UPLOAD_URL','https://example.test'),patch.object(self.backend,'_evidence_context',return_value=self.context),patch.object(self.backend,'_process_claimed') as process:
+            self.backend.finalize_evidence_upload('token',self.evidence,'image','rota-8/pev-13/weighing_scale')
+        calls=self.backend.rota.Supa.rpc.call_args_list
+        self.assertEqual('prepare_evidence_sync',calls[0].args[0])
+        self.assertEqual(self.context,calls[0].args[2]['p_context'])
+        self.assertEqual('claim_evidence_sync',calls[1].args[0])
+        process.assert_called_once_with('token',self.evidence,'image')
 
-        def original_upload(*_args):
-            events.append('storage')
-            return 'rota-8/pev-13/weighing_scale/foto.jpg'
+    def test_sync_uses_frozen_context_and_keeps_original_by_default(self):
+        with patch.object(self.backend,'_evidence_context') as context,patch.object(self.backend,'_upload_to_sharepoint',return_value=(self.context,'hash',{'id':'remote'})) as upload,patch.object(self.backend,'_mark_sync') as mark,patch.object(self.backend,'_delete_supabase_object') as delete,patch.dict(self.backend.os.environ,{'DELETE_SUPABASE_AFTER_SYNC':'false'}):
+            result=self.backend._process_claimed('token',self.evidence,'image')
+        context.assert_not_called();delete.assert_not_called()
+        self.assertEqual(self.context,upload.call_args.kwargs['context'])
+        self.assertEqual('synced',result['status']);self.assertEqual('synced',mark.call_args.kwargs['status'])
 
-        def resolve_context(*_args):
-            events.append('context')
-            return self.context
+    def test_failed_transfer_is_persisted_for_retry_and_does_not_delete_photo(self):
+        with patch.object(self.backend,'_upload_to_sharepoint',side_effect=RuntimeError('offline')),patch.object(self.backend,'_delete_supabase_object') as delete:
+            result=self.backend._process_claimed('token',self.evidence,'image')
+        delete.assert_not_called();self.assertEqual('error',result['status'])
+        self.assertEqual('fail_evidence_sync',self.backend.rota.Supa.rpc.call_args.args[0])
 
-        class FakeThread:
-            def __init__(self, *, target, args, daemon):
-                events.append('thread')
-                captured.update(target=target, args=args, daemon=daemon)
+    def test_no_configuration_keeps_storage_without_starting_sync(self):
+        with patch.object(self.backend,'AZURE_FUNCTION_UPLOAD_URL',''):
+            self.assertEqual(self.evidence['storage_path'],self.backend.upload_evidence('token','image','path'))
+            self.backend.finalize_evidence_upload('token',self.evidence,'image','path')
+        self.backend.rota.Supa.rpc.assert_not_called()
 
-            def start(self):
-                events.append('start')
-
-        self.backend.AZURE_FUNCTION_UPLOAD_URL = 'https://function.example/upload'
-        self.backend._ORIGINAL_UPLOAD = original_upload
-        with (
-            patch.object(self.backend, '_evidence_context', side_effect=resolve_context),
-            patch.object(self.backend.threading, 'Thread', FakeThread),
-        ):
-            storage_path = self.backend.upload_evidence(
-                'production-token',
-                'data:image/jpeg;base64,AA==',
-                'rota-8/pev-13/weighing_scale',
-            )
-
-        self.assertEqual('rota-8/pev-13/weighing_scale/foto.jpg', storage_path)
-        self.assertEqual(['storage', 'context', 'thread', 'start'], events)
-        self.assertIs(self.backend._sync_after_insert, captured['target'])
-        self.assertEqual(self.context, captured['args'][4])
-        self.assertIsNot(self.context, captured['args'][4])
-        self.assertTrue(captured['daemon'])
-
-    def test_sharepoint_payload_uses_frozen_names_without_querying_again(self):
-        sent = {}
-
-        class Response:
-            ok = True
-            status_code = 200
-            text = ''
-
-            @staticmethod
-            def json():
-                return {'ok': True, 'folder': 'pasta-correta'}
-
-        def post(url, json, timeout):
-            sent.update(url=url, json=json, timeout=timeout)
-            return Response()
-
-        self.backend.AZURE_FUNCTION_UPLOAD_URL = 'https://function.example/upload'
-        self.backend.rota.HTTP = types.SimpleNamespace(post=post)
-        with (
-            patch.object(self.backend, '_decode_image_data', return_value=('QUJD', b'abc', 'jpg')),
-            patch.object(self.backend, '_sharepoint_filename', return_value=('balanca_hash.jpg', 'hash')),
-            patch.object(
-                self.backend,
-                '_evidence_context',
-                side_effect=AssertionError('não deve consultar após a pesagem'),
-            ),
-        ):
-            context, digest, result = self.backend._upload_to_sharepoint(
-                'production-token',
-                'data:image/jpeg;base64,QUJD',
-                'rota-8/pev-13/weighing_scale',
-                context=self.context,
-            )
-
-        self.assertEqual(self.context, context)
-        self.assertEqual('hash', digest)
-        self.assertTrue(result['ok'])
-        self.assertEqual('Rota 21/08/2026', sent['json']['route_name'])
-        self.assertEqual('EMEIEF Izabel Fernandes Pedroso', sent['json']['pev_name'])
-        self.assertEqual('balanca_hash.jpg', sent['json']['filename'])
-        self.assertEqual('2026', sent['json']['year'])
-        self.assertEqual(8, sent['json']['month'])
-
-    def test_background_sync_forwards_the_frozen_context(self):
-        upload = Mock(return_value=(self.context, 'hash', {'ok': True}))
-        with (
-            patch.object(self.backend, '_find_evidence', return_value={'id': 99}),
-            patch.object(self.backend, '_mark_sync'),
-            patch.object(self.backend, '_upload_to_sharepoint', upload),
-            patch.object(self.backend, '_delete_supabase_object'),
-        ):
-            self.backend._sync_after_insert(
-                'production-token',
-                'storage/path.jpg',
-                'data:image/jpeg;base64,QUJD',
-                'rota-8/pev-13/weighing_scale',
-                self.context,
-            )
-
-        upload.assert_called_once_with(
-            'production-token',
-            'data:image/jpeg;base64,QUJD',
-            'rota-8/pev-13/weighing_scale',
-            context=self.context,
-        )
-
-    def test_no_sharepoint_configuration_keeps_the_fast_fallback(self):
-        self.backend.AZURE_FUNCTION_UPLOAD_URL = ''
-        self.backend._ORIGINAL_UPLOAD = Mock(return_value='storage/path.jpg')
-        with (
-            patch.object(
-                self.backend,
-                '_evidence_context',
-                side_effect=AssertionError('não deve consultar sem SharePoint'),
-            ),
-            patch.object(self.backend.threading, 'Thread') as thread,
-        ):
-            result = self.backend.upload_evidence(
-                'token',
-                'data:image/jpeg;base64,AA==',
-                'rota-8/pev-13/weighing_scale',
-            )
-
-        self.assertEqual('storage/path.jpg', result)
-        thread.assert_not_called()
+    def test_retry_processes_only_reserved_rows(self):
+        self.backend.rota.Supa.rpc.return_value=[self.evidence]
+        with patch.object(self.backend,'AZURE_FUNCTION_UPLOAD_URL','https://example.test'),patch.object(self.backend,'_process_claimed',return_value={'id':99,'status':'synced'}) as process:
+            result=self.backend.retry_pending('admin-token')
+        process.assert_called_once_with('admin-token',self.evidence)
+        self.assertEqual([{'id':99,'status':'synced'}],result['items'])
 
 
-if __name__ == '__main__':
-    unittest.main()
+if __name__=='__main__':unittest.main()

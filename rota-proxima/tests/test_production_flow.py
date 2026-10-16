@@ -144,17 +144,17 @@ class RequestedInterfaceTests(unittest.TestCase):
 
     def test_deferred_local_sync_metadata_is_not_published(self):
         combined = '\n'.join((self.backend, self.frontend, self.styles))
-        for marker in ('showDirectoryPicker', 'evidence-sync', 'SHAREPOINT_ONLY', 'Rota - PEV', 'OneDrive -'):
+        for marker in ('showDirectoryPicker', 'SHAREPOINT_ONLY', 'Rota - PEV', 'OneDrive -'):
             self.assertNotIn(marker, combined)
 
     def test_production_sharepoint_upload_uses_only_new_production_evidence(self):
         self.assertIn("BUCKET = 'rota-evidencias'", self.sharepoint_backend)
         self.assertIn('_ORIGINAL_UPLOAD = rota.upload_evidence', self.sharepoint_backend)
-        self.assertIn("if not AZURE_FUNCTION_UPLOAD_URL:\n        return storage_path", self.sharepoint_backend)
-        self.assertIn('target=_sync_after_insert', self.sharepoint_backend)
-        self.assertIn('daemon=True', self.sharepoint_backend)
+        self.assertIn("return _ORIGINAL_UPLOAD(token,data_url,path_prefix)", self.sharepoint_backend)
+        self.assertIn("'claim_evidence_sync'", self.sharepoint_backend)
+        self.assertNotIn('daemon=True', self.sharepoint_backend)
         self.assertIn('update_own_evidence_sync', self.sharepoint_backend)
-        self.assertIn('startCommand: python server_sharepoint.py', self.render_config)
+        self.assertIn('startCommand: python server_final.py', self.render_config)
         self.assertIn('key: AZURE_FUNCTION_UPLOAD_URL', self.render_config)
         self.assertNotRegex(self.sharepoint_backend, r"BUCKET\s*=\s*'[^']*teste[^']*'")
 

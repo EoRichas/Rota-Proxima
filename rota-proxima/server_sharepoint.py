@@ -5,8 +5,6 @@ import base64
 import hashlib
 import os
 import re
-import threading
-import time
 
 import server as rota
 
@@ -113,23 +111,12 @@ def _upload_to_sharepoint(token, data_url, path_prefix, context=None):
         data = response.json()
     except Exception:
         data = {}
-    if not response.ok or not data.get('ok'):
+    if not response.ok or not data.get('ok') or not data.get('id'):
         detail = str(data.get('error') or response.text or f'HTTP {response.status_code}').strip()
         raise RuntimeError(f'Falha ao salvar foto no SharePoint: {detail[:700]}')
+    if data.get('size') is not None and int(data['size'])!=len(raw):
+        raise RuntimeError('O SharePoint não confirmou o tamanho completo da foto')
     return context, digest, data
-
-
-def _find_evidence(token, storage_path):
-    for _ in range(20):
-        rows = rota.Supa.get('route_evidences', token, {
-            'storage_path': f'eq.{storage_path}',
-            'select': 'id,storage_path,sharepoint_status',
-            'limit': '1',
-        }) or []
-        if rows:
-            return rows[0]
-        time.sleep(.25)
-    return None
 
 
 def _mark_sync(token, evidence_id, status=None, data=None, error=None, storage_deleted_at=None):
@@ -166,62 +153,71 @@ def _delete_supabase_object(token, storage_path):
         raise RuntimeError(detail or f'Falha ao limpar Storage: HTTP {response.status_code}')
 
 
-def _sync_after_insert(token, storage_path, data_url, path_prefix, context):
-    evidence = _find_evidence(token, storage_path)
-    if not evidence:
-        print(f'[SHAREPOINT] Evidência ainda pendente; registro não localizado: {storage_path}')
-        return
-    evidence_id = int(evidence['id'])
+def _process_claimed(token, evidence, data_url=None):
+    evidence_id=int(evidence['id'])
+    storage_path=evidence['storage_path']
+    path_prefix=storage_path.rsplit('/',1)[0]
     try:
-        _mark_sync(token, evidence_id, status='syncing')
-        context, digest, sharepoint_data = _upload_to_sharepoint(
-            token,
-            data_url,
-            path_prefix,
-            context=context,
-        )
-        sharepoint_data['sha256'] = digest
-        _mark_sync(token, evidence_id, status='synced', data=sharepoint_data)
-        print(
-            f"[SHAREPOINT] Evidência sincronizada: id={evidence_id} "
-            f"rota={context['route_id']} pev={context['pev_id']}"
-        )
+        context=evidence.get('sync_context') or _evidence_context(token,path_prefix)
+        if not data_url:
+            response=rota.HTTP.get(
+                f'{rota.SUPABASE_URL}/storage/v1/object/authenticated/{BUCKET}/{storage_path}',
+                headers=rota.Supa.headers(token),timeout=20)
+            response.raise_for_status()
+            mime=response.headers.get('Content-Type','image/jpeg').split(';')[0]
+            data_url=f'data:{mime};base64,'+base64.b64encode(response.content).decode()
+        _,digest,sharepoint_data=_upload_to_sharepoint(token,data_url,path_prefix,context=context)
+        sharepoint_data['sha256']=digest
+        _mark_sync(token,evidence_id,status='synced',data=sharepoint_data)
+        # Deletion is opt-in. A failed or interrupted transfer always keeps the original.
+        if os.environ.get('DELETE_SUPABASE_AFTER_SYNC','').lower()=='true':
+            try:
+                _delete_supabase_object(token,storage_path)
+                _mark_sync(token,evidence_id,storage_deleted_at=rota.now_iso())
+            except Exception:
+                print(f'[SHAREPOINT] Evidência {evidence_id} sincronizada; limpeza pendente')
+        return {'id':evidence_id,'status':'synced'}
     except Exception as exc:
-        try:
-            _mark_sync(token, evidence_id, status='error', error=exc)
-        except Exception as mark_exc:
-            print(f'[SHAREPOINT] Falha ao registrar erro da evidência {evidence_id}: {mark_exc}')
-        print(f'[SHAREPOINT] Evidência {evidence_id} mantida no Supabase: {exc}')
-        return
+        rota.Supa.rpc('fail_evidence_sync',token,{'p_evidence_id':evidence_id,'p_error':str(exc)[:700]})
+        print(f'[SHAREPOINT] Evidência {evidence_id}: tentativa mantida na fila persistente')
+        return {'id':evidence_id,'status':'error'}
 
+
+def upload_evidence(token,data_url,path_prefix):
+    return _ORIGINAL_UPLOAD(token,data_url,path_prefix)
+
+
+def finalize_evidence_upload(token,evidence,data_url,path_prefix):
+    if not AZURE_FUNCTION_UPLOAD_URL:return
     try:
-        _delete_supabase_object(token, storage_path)
-        _mark_sync(token, evidence_id, storage_deleted_at=rota.now_iso())
-    except Exception as exc:
-        # A foto já está confirmada no SharePoint. Mantemos a cópia de contingência
-        # para uma limpeza posterior, sem alterar o status de sincronização.
-        print(f'[SHAREPOINT] Limpeza pendente para evidência {evidence_id}: {exc}')
+        context=_evidence_context(token,path_prefix)
+        rota.Supa.rpc('prepare_evidence_sync',token,{'p_evidence_id':int(evidence['id']),'p_context':context})
+        rows=rota.Supa.rpc('claim_evidence_sync',token,{'p_limit':1,'p_evidence_id':int(evidence['id'])}) or []
+        for row in rows:_process_claimed(token,row,data_url)
+    except Exception:
+        # The durable evidence record remains pending even if the immediate attempt fails.
+        print(f"[SHAREPOINT] Evidência {evidence['id']} aguardando reprocessamento persistente")
 
 
-def upload_evidence(token, data_url, path_prefix):
-    # Somente novos uploads deste ambiente entram no bucket e na fila de produção.
-    storage_path = _ORIGINAL_UPLOAD(token, data_url, path_prefix)
+def retry_pending(token,limit=3,reset_errors=False):
     if not AZURE_FUNCTION_UPLOAD_URL:
-        return storage_path
-    # Esta função ainda está no fluxo síncrono da requisição: a evidência e a
-    # pesagem só serão inseridas pelo servidor depois que ela retornar. Assim,
-    # rota, PEV e data são resolvidos enquanto o usuário ainda pode consultá-los.
-    context = dict(_evidence_context(token, path_prefix))
-    threading.Thread(
-        target=_sync_after_insert,
-        args=(token, storage_path, data_url, path_prefix, context),
-        daemon=True,
-    ).start()
-    return storage_path
+        return {'configured':False,'items':[]}
+    if reset_errors:rota.Supa.rpc('reset_failed_evidence_sync',token)
+    rows=rota.Supa.rpc('claim_evidence_sync',token,{'p_limit':max(1,min(int(limit),3))}) or []
+    return {'configured':True,'items':[_process_claimed(token,row) for row in rows]}
 
 
 class SharePointHandler(rota.AppHandler):
     def api_get(self, path):
+        if path == '/api/jobs/evidence-sync':
+            import hmac
+            secret=os.environ.get('CRON_SECRET','')
+            authorization=self.headers.get('Authorization','')
+            if not secret or not hmac.compare_digest(authorization,f'Bearer {secret}'):
+                return self.send_json({'error':'Sem permissão'},403)
+            service=os.environ.get('SUPABASE_SERVICE_ROLE_KEY','')
+            if not service:return self.send_json({'error':'Credencial do processamento não configurada'},503)
+            return self.send_json(retry_pending(service))
         if path == '/api/health':
             return self.send_json({
                 'ok': True,
@@ -236,6 +232,7 @@ class SharePointHandler(rota.AppHandler):
 
 
 rota.upload_evidence = upload_evidence
+rota.finalize_evidence_upload = finalize_evidence_upload
 rota.AppHandler = SharePointHandler
 
 

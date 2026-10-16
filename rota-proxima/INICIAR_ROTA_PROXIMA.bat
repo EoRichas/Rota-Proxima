@@ -27,7 +27,7 @@ if errorlevel 1 (
 )
 
 echo Encerrando instancias antigas do Rota Proxima...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^python(w)?\.exe$' -and $_.CommandLine -match 'server\.py' }; foreach($p in $procs){ try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; Write-Host ('  Encerrado PID ' + $p.ProcessId) } catch {} }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^python(w)?\.exe$' -and $_.CommandLine -match 'server(_final|_hardened|_sharepoint)?\.py' }; foreach($p in $procs){ try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; Write-Host ('  Encerrado PID ' + $p.ProcessId) } catch {} }"
 timeout /t 2 /nobreak >nul
 
 set "PORTPID="

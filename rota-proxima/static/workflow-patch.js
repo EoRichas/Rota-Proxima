@@ -232,9 +232,9 @@
     const address = encodeURIComponent(fullAddress);
 
     if ($('#googleNav')) $('#googleNav').onclick = () =>
-      window.open(`https://www.google.com/maps/dir/?api=1&destination=${address}&travelmode=driving&dir_action=navigate`, '_blank');
+      window.open(`https://www.google.com/maps/dir/?api=1&destination=${next.location_confirmed&&next.lat!=null&&next.lng!=null?`${next.lat},${next.lng}`:address}&travelmode=driving&dir_action=navigate`, '_blank');
     if ($('#wazeNav')) $('#wazeNav').onclick = () =>
-      window.open(`https://waze.com/ul?q=${address}&navigate=yes`, '_blank');
+      window.open(`https://waze.com/ul?${next.location_confirmed&&next.lat!=null&&next.lng!=null?`ll=${next.lat},${next.lng}`:`q=${address}`}&navigate=yes`, '_blank');
 
     if ($('#arriveStop')) $('#arriveStop').onclick = async () => {
       try {

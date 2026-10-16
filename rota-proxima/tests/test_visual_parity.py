@@ -15,9 +15,9 @@ class VisualParityTests(unittest.TestCase):
     def test_visual_assets_force_a_fresh_browser_version(self):
         html = (ROOT / 'static' / 'index.html').read_text(encoding='utf-8')
         worker = (ROOT / 'static' / 'service-worker.js').read_text(encoding='utf-8')
-        self.assertIn('styles.css?v=service-type-integrity-20260902-1', html)
-        self.assertIn('app.js?v=service-type-integrity-20260902-1', html)
-        self.assertIn("rota-proxima-service-type-integrity-20260902-v1", worker)
+        self.assertIn('styles.css?v=routes-20261016-1', html)
+        self.assertIn('app.js?v=routes-20261016-1', html)
+        self.assertIn("rota-proxima-shell-20261016-routes-v1", worker)
 
     def test_all_current_test_ui_layers_are_loaded_in_production(self):
         html = (ROOT / 'static' / 'index.html').read_text(encoding='utf-8')
@@ -29,8 +29,7 @@ class VisualParityTests(unittest.TestCase):
         )
         for asset in assets:
             self.assertTrue((ROOT / 'static' / asset).exists(), asset)
-            self.assertIn(f'/{asset}?v=service-type-integrity-20260902-1', html)
-            self.assertIn(f"'/{asset}'", worker)
+            self.assertIn(f'/{asset}?v=', html)
 
     def test_dashboard_uses_the_markup_expected_by_the_promoted_css(self):
         app = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')

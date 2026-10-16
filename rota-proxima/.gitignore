@@ -2,3 +2,8 @@ __pycache__/
 *.py[cod]
 
 supabase/.temp/
+public/
+.env
+.env.local
+.vercel/
+node_modules
