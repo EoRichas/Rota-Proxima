@@ -62,6 +62,19 @@ class PaginationTests(unittest.TestCase):
 
 
 class ReorderTests(unittest.TestCase):
+    def test_admin_and_assigned_driver_use_named_reorder_contract(self):
+        route={'driver_id':'driver','status':'in_progress','origin':{'lat':-23,'lng':-47},
+               'stops':[{'id':2,'status':'pending','sequence':1,'lat':-23.1,'lng':-47.1},
+                        {'id':3,'status':'pending','sequence':2,'lat':-23.2,'lng':-47.2}]}
+        matrix=[[0,10,20],[10,0,30],[20,30,0]]
+        for user in ({'id':'admin','role':'admin'},{'id':'driver','role':'driver'}):
+            with self.subTest(role=user['role']),patch.object(server,'get_route_full',return_value=route),patch.object(server,'osrm_matrix',return_value=(matrix,matrix,'osrm')),patch.object(server.Supa,'rpc') as rpc:
+                operations.reorder_route('token',user,1,{'stop_ids':[3,2],'expected_ids':[2,3]})
+                name,token,payload=rpc.call_args.args
+                self.assertEqual('reorder_pending_stops',name)
+                self.assertEqual({'p_route_id','p_expected_ids','p_updates'},set(payload))
+                self.assertEqual([3,2],[stop['id'] for stop in payload['p_updates']])
+
     def test_driver_cannot_reorder_another_drivers_route(self):
         with patch.object(server,'get_route_full',return_value={'driver_id':'other'}),patch.object(server.Supa,'rpc') as rpc:
             with self.assertRaisesRegex(ValueError,'sem permissão'):operations.reorder_route('token',{'id':'me','role':'driver'},1,{})
@@ -89,6 +102,19 @@ class BackupTests(unittest.TestCase):
         with patch.object(server.Supa,'get') as get:
             self.assertEqual(403,operations.backup_endpoint(handler,'/api/backup/evidence/1',{'role':'driver'},'token',{})[0])
         get.assert_not_called()
+
+
+class DriverContactTests(unittest.TestCase):
+    def test_route_api_preserves_contact_fields_from_pev(self):
+        def get(table,token,params):
+            if table=='routes':return [{'id':1,'driver_id':'driver','profiles':{'name':'Motorista'}}]
+            if table=='route_stops':return [{'id':2,'sequence':1,'status':'pending','pevs':{
+                'name':'Bella','contact_name':'Ana','contact_role':'Síndica','phone':'(15) 99999-8888','whatsapp':True}}]
+            return []
+        with patch.object(server.Supa,'get',side_effect=get):
+            stop=server.get_route_full('driver-token',1)['stops'][0]
+        self.assertEqual(('Ana','Síndica','(15) 99999-8888',True),
+                         tuple(stop[key] for key in ('contact_name','contact_role','phone','whatsapp')))
 
 
 if __name__=='__main__':unittest.main()

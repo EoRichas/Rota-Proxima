@@ -21,6 +21,7 @@ Configure as variáveis da `.env.example` em Preview e Production. Use um projet
 
 1. Faça backup nativo do banco e evidências. Leia `supabase/DATABASE.md` sobre o baseline histórico ainda pendente de acesso.
 2. Aplique a nova migração de outubro em homologação e depois, quando validada, no banco de produção. Não reaplique migrações antigas.
+   Execute também `scripts/check_database_contract.sql` no SQL Editor do projeto alvo: todas as linhas devem mostrar `installed=true`, `authenticated_can_execute=true` e `anon_can_execute=false`. A mensagem `Could not find the function public.reorder_pending_stops(...) in the schema cache` pode significar que a função não existe: confirme a migração aplicada antes de apenas recarregar o cache com `NOTIFY pgrst, 'reload schema'`. No diagnóstico de 19/10/2026, essa migração ainda estava ausente no projeto Rota Próxima SP; sua aplicação direta exige autorização específica para o banco de produção.
 3. Publique também a nova rota Azure `evidence-download-link`, necessária para recuperar fotos antigas já removidas do Supabase.
 4. Crie um Preview Vercel usando a branch desta PR. Verifique `/api/health`, login com sessão existente, criação da rota, fotos, entrega/coleta, pesagem, reordenação e exportação ZIP.
 5. Para promover, primeiro faça o merge aprovado e publique a versão correspondente na Vercel. Ajuste o domínio somente depois do teste completo. O Render permanece disponível para rollback.

@@ -22,4 +22,11 @@
 .is-dragging { opacity: .55; }
 .drag-target { outline: 2px solid var(--success); outline-offset: 2px; }
 .reorder-status { font-size: 12px; margin: 10px 0; }
+.driver-contact { display: grid; gap: 8px; min-width: 0; margin: 14px 0; padding: 12px 0; border-block: 1px solid var(--line); overflow-wrap: anywhere; }
+.driver-contact-compact { margin: 6px 0 0; padding: 0; border: 0; font-size: 13px; }
+.driver-contact-name { line-height: 1.5; }
+.driver-contact-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.driver-contact-phone { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
+.driver-contact-compact .driver-contact-whatsapp { min-height: 32px; padding: 4px 8px; }
+.driver-sequence-card .timeline-item > div:nth-last-child(2) { min-width: 0; flex: 1; }
 @media(max-width:600px){ .route-stop.route-reorder-row { grid-template-columns: 32px 28px minmax(0,1fr); } .route-stop.route-reorder-row > .badge { grid-column: 3; justify-self: start; } }

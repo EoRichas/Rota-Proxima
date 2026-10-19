@@ -20,8 +20,8 @@ try{
  const requests=[{id:50,pev_id:30,pev_name:'PEV 30',status:'pending',priority:'normal',requested_date:'2026-10-20',requested_by_name:'Comercial',city:'Sorocaba',state:'SP'}];
  let route={id:99,name:'Rota de teste',driver_id:'driver-1',driver_name:'Motorista',status:'in_progress',route_date:'2026-10-20',origin:{lat:-23.5,lng:-47.4},total_distance_m:1000,total_duration_s:120,evidences:[],weighings:[],timeline:[],stops:[
   {id:101,sequence:1,pev_id:1,pev_name:'Já concluída',status:'completed',service_type:'delivery',street:'Rua A',city:'Sorocaba',state:'SP',priority:'normal',lat:-23.5,lng:-47.4},
-  {id:102,sequence:2,pev_id:2,pev_name:'Bella',status:'pending',service_type:'collection',street:'Rua B',city:'Sorocaba',state:'SP',priority:'normal',lat:-23.5,lng:-47.4},
-  {id:103,sequence:3,pev_id:3,pev_name:'CHS',status:'pending',service_type:'delivery',street:'Rua C',city:'Sorocaba',state:'SP',priority:'normal',lat:-23.5,lng:-47.4}]};
+  {id:102,sequence:2,pev_id:2,pev_name:'Bella',status:'pending',service_type:'collection',street:'Rua B',city:'Sorocaba',state:'SP',priority:'normal',lat:-23.5,lng:-47.4,contact_name:'Ana Responsável',contact_role:'Síndica',phone:'(15) 99999-8888',whatsapp:true},
+  {id:103,sequence:3,pev_id:3,pev_name:'CHS',status:'pending',service_type:'delivery',street:'Rua C',city:'Sorocaba',state:'SP',priority:'normal',lat:-23.5,lng:-47.4,contact_name:'Carlos',phone:'(15) 3333-2222',whatsapp:false}]};
  await page.route('**/api/**',async intercept=>{
   const request=intercept.request(),url=new URL(request.url()),path=url.pathname;calls.push(path);
   let json={ok:true};
@@ -85,12 +85,22 @@ try{
  console.log('Reordenação por teclado aprovada.');await page.locator('#modal .modal-close').first().click();
  await page.evaluate(()=>{state.user={id:'driver-1',name:'Motorista',username:'driver',role:'driver'};return go('driver');});
  await page.locator('.driver-sequence-card .route-drag-handle').first().waitFor();
+ assert.match(await page.locator('.next-stop .driver-contact').textContent(),/Carlos/);
+ assert.equal(await page.locator('.next-stop .driver-contact-whatsapp').count(),0);
+ assert.equal(await page.locator('.driver-sequence-card .driver-contact-whatsapp').getAttribute('href'),'https://wa.me/5515999998888');
  const handles=page.locator('.driver-sequence-card .route-drag-handle');
  console.log('Motorista pronto para arraste.');await handles.last().scrollIntoViewIfNeeded();const first=await handles.first().boundingBox(),last=await handles.last().boundingBox();
  await page.mouse.move(first.x+first.width/2,first.y+first.height/2);await page.mouse.down();
  await page.mouse.move(last.x+last.width/2,last.y+last.height/2,{steps:8});await page.mouse.up();
  await page.waitForFunction(()=>document.querySelector('.driver-sequence-card').textContent.indexOf('Bella')<document.querySelector('.driver-sequence-card').textContent.indexOf('CHS'));
  assert.deepEqual(reorderBody.stop_ids,[102,103]);
+ assert.match(await page.locator('.next-stop .driver-contact').textContent(),/Ana Responsável/);
+ assert.equal(await page.locator('.next-stop .driver-contact-whatsapp').getAttribute('href'),'https://wa.me/5515999998888');
+ await page.setViewportSize({width:390,height:844});
+ assert.equal(await page.locator('.next-stop .driver-contact-whatsapp').isVisible(),true);
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.evaluate(route=>drawDriverRoute({...route,status:'released'}),route);
+ assert.equal(await page.locator('.driver-sequence-card .driver-contact-whatsapp').isVisible(),true);
  assert.equal(errors.length,0,errors.join('\n'));
  // Validate the generated ZIP against Python's standard reader (including UTF-8 names and CRC).
  const archive=await page.evaluate(async()=>[...new Uint8Array(await backupZip([{name:'evidências/teste.txt',bytes:new TextEncoder().encode('Arquivo íntegro')}]).arrayBuffer())]);
