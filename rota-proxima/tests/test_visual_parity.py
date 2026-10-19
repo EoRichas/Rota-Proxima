@@ -16,8 +16,8 @@ class VisualParityTests(unittest.TestCase):
         html = (ROOT / 'static' / 'index.html').read_text(encoding='utf-8')
         worker = (ROOT / 'static' / 'service-worker.js').read_text(encoding='utf-8')
         self.assertIn('styles.css?v=routes-20261016-1', html)
-        self.assertIn('app.js?v=routes-20261016-1', html)
-        self.assertIn("rota-proxima-shell-20261016-routes-v1", worker)
+        self.assertIn('app.js?v=driver-contact-20261019-1', html)
+        self.assertIn("rota-proxima-shell-20261019-driver-contact-v1", worker)
 
     def test_all_current_test_ui_layers_are_loaded_in_production(self):
         html = (ROOT / 'static' / 'index.html').read_text(encoding='utf-8')
