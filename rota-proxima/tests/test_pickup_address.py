@@ -35,11 +35,11 @@ class PickupAddressTests(unittest.TestCase):
         def get(table,*args):
             if table=='routes':return [{'id':5}]
             if table=='route_stops':return [{'id':4,'pevs':{'name':'Meta','contact_name':'João','street':'Sede','lat':0,'lng':0},
-                'pickup_address':{'street':'Rua Nova','number':'12','lat':3,'lng':4}}]
+                'pickup_address':{'street':'Rua Nova','number':'12','lat':3,'lng':4,'contact_name':'Contato local','phone':'(11) 90000-0000','whatsapp':True}}]
             return []
         with patch.object(server.Supa,'get',side_effect=get):
             stop=server.get_route_full('driver',5)['stops'][0]
-        self.assertEqual(('Rua Nova','12',3,4,'João'),tuple(stop[k] for k in ('street','number','lat','lng','contact_name')))
+        self.assertEqual(('Rua Nova','12',3,4,'Contato local','(11) 90000-0000',True),tuple(stop[k] for k in ('street','number','lat','lng','contact_name','phone','whatsapp')))
         self.assertFalse(stop['location_confirmed'])
 
     def test_no_meta_destination_from_fixed_pev(self):
@@ -49,6 +49,7 @@ class PickupAddressTests(unittest.TestCase):
         masked=server.at_pickup(pev,None)
         self.assertIsNone(masked['street'])
         self.assertIsNone(masked['lat'])
+        self.assertIsNone(server.at_pickup({'phone':'1111','whatsapp':True},{'street':'Rua'})['phone'])
 
     def test_history_uses_visited_places_in_role_scope_and_not_assumed_addresses(self):
         a={'cep':'01001-000','street':'Praça da Sé','number':'120'}
@@ -64,3 +65,14 @@ class PickupAddressTests(unittest.TestCase):
             self.assertEqual(len(result),2)
             self.assertEqual(result[0]['visited_at'],'2026-11-02')
             self.assertNotIn('street',result[1])
+
+    def test_contact_is_optional_and_preserved_with_the_requested_location(self):
+        pev={'requires_pickup_address':True}
+        fields=dict(pickup_cep='01001-000',pickup_street='Praça da Sé',pickup_number='120')
+        postal={'cep':'01001-000','city':'São Paulo','state':'SP'}
+        with patch.object(server,'viacep_lookup',return_value=postal):
+            self.assertFalse(server.pickup_for_request(pev,fields)['whatsapp'])
+            address=server.pickup_for_request(pev,{**fields,'pickup_phone':'+55 (11) 90000-0000','pickup_whatsapp':'1','pickup_contact_name':'Portaria'})
+            self.assertEqual((address['phone'],address['contact_name'],address['whatsapp']),('+55 (11) 90000-0000','Portaria',True))
+            with self.assertRaises(ValueError):server.pickup_for_request(pev,{**fields,'pickup_phone':'123'})
+            with self.assertRaises(ValueError):server.pickup_for_request(pev,{**fields,'pickup_whatsapp':'1'})

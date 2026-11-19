@@ -33,7 +33,7 @@ const fmtDate = s => s ? new Date(`${s}T12:00:00`).toLocaleDateString('pt-BR') :
 const fmtDateTime = s => s ? new Date(s).toLocaleString('pt-BR', {dateStyle:'short', timeStyle:'short'}) : '—';
 const localHHMM = () => { const d=new Date(); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
 const digits = s => String(s||'').replace(/\D/g,'');
-const phoneHref = s => `tel:${digits(s)}`;
+const phoneHref = s => { const n=digits(s); return `tel:${String(s).trim().startsWith('+')||/^55[0-9]{10,11}$/.test(n)?'+':''}${n}`; };
 const whatsHref = s => { const number=digits(s); return `https://wa.me/${[10,11].includes(number.length)?`55${number}`:number}`; };
 const statusLabel = {draft:'Rascunho',released:'Liberada',in_progress:'Em andamento',finished:'Finalizada',cancelled:'Cancelada'};
 const priorityLabel = {urgent:'Urgente',high:'Alta',normal:'Normal',low:'Baixa'};
@@ -568,6 +568,11 @@ function openRequestModal(pev=null){
         <label class="field"><span>Número *</span><input name="pickup_number" maxlength="20" placeholder="Nº ou s/n" required></label>
       </div>
       <small class="pickup-postal-status" role="status"></small>
+      <div class="pickup-contacts">
+        <label class="field"><span>Responsável no local</span><input name="pickup_contact_name" maxlength="100" placeholder="Nome do responsável"></label>
+        <label class="field"><span>Telefone do responsável</span><input name="pickup_phone" type="tel" maxlength="24" placeholder="(DDD) 00000-0000"></label>
+      </div>
+      <label class="pickup-whatsapp"><input name="pickup_whatsapp" type="checkbox" value="1" disabled> Este número tem WhatsApp</label>
     </fieldset>
     <label class="field"><span>Data solicitada *</span><input type="date" name="requested_date" value="${today}" required></label><label class="field"><span>Prioridade</span><select name="priority">${priorityOptions('normal')}</select></label>
     <label class="field span-2"><span>Horário específico para esta coleta</span><input type="time" name="exact_time"><small class="muted">Opcional e válido somente para esta solicitação.</small></label>

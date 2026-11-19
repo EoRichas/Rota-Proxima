@@ -777,7 +777,7 @@ def ensure_pev_coords(token,pev):
 def pickup_for_request(pev, data):
     fields = ('pickup_cep', 'pickup_street', 'pickup_number')
     if not pev.get('requires_pickup_address'):
-        if any(data.get(k) for k in fields):
+        if any(data.get(k) for k in (*fields,'pickup_phone','pickup_contact_name','pickup_whatsapp')):
             raise ValueError('Esta PEV usa o endereço do cadastro.')
         return None
     cep, street, number = (str(data.get(k) or '').strip() for k in fields)
@@ -785,11 +785,21 @@ def pickup_for_request(pev, data):
         raise ValueError('Informe um CEP de coleta com oito dígitos.')
     if not street or len(street) > 160 or not number or len(number) > 20:
         raise ValueError('Informe a rua e o número da coleta (ou s/n).')
+    phone = str(data.get('pickup_phone') or '').strip()
+    name = str(data.get('pickup_contact_name') or '').strip()
+    whatsapp = data.get('pickup_whatsapp') in ('1', True)
+    if len(name)>100:
+        raise ValueError('O nome do responsável deve ter até 100 caracteres.')
+    if phone and (len(phone)>24 or not re.fullmatch(r'[+0-9() .-]+',phone)
+                  or not re.fullmatch(r'(?:55)?[1-9][0-9]{9,10}',re.sub(r'[^0-9]','',phone))):
+        raise ValueError('Informe um telefone do responsável com DDD.')
+    if whatsapp and not phone:
+        raise ValueError('Informe o telefone para habilitar o WhatsApp.')
     try:
         postal = viacep_lookup(cep)
     except requests.RequestException as exc:
         raise ValueError('Não foi possível consultar o CEP agora. Tente enviar novamente.') from exc
-    return {'cep': postal['cep'], 'street': street, 'number': number,
+    return {'contact_name':name,'phone':phone,'whatsapp':whatsapp,'cep': postal['cep'], 'street': street, 'number': number,
             'city': postal['city'], 'state': postal['state'], 'district': postal.get('district') or ''}
 
 
@@ -813,7 +823,7 @@ def pickup_history(token, user, pev_id):
         address = row.get('pickup_address') or {}
         if address:
             key = (clean_cep(address.get('cep')),str(address.get('street')).strip().casefold(),str(address.get('number')).strip().casefold())
-            place = {k: address.get(k) for k in ('cep','street','number','district','city','state','lat','lng')}
+            place = {k: address.get(k) for k in ('cep','street','number','district','city','state','lat','lng','contact_name','phone','whatsapp')}
         elif row.get('arrived_lat') is not None and row.get('arrived_lng') is not None:
             # Legacy: GPS at arrival is known; the address at the time is not.
             key = (round(row['arrived_lat'],5),round(row['arrived_lng'],5))
@@ -834,6 +844,8 @@ def at_pickup(pev, address):
     # Never inherit a fixed entrance, complement or coordinates from the PEV.
     return {**pev, **{k: address.get(k) for k in
             ('street','number','district','city','state','cep','complement','lat','lng')},
+            'contact_name':address.get('contact_name'), 'contact_role':None,
+            'phone':address.get('phone'), 'whatsapp':address.get('whatsapp') is True,
             'location_confirmed': False, 'pickup_address': address}
 
 

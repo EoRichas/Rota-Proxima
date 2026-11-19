@@ -31,7 +31,7 @@ try{
   else if(path==='/api/setup-status')json={needs_setup:false};
   else if(path==='/api/pevs')json={items:pevs};
   else if(path==='/api/pickup-postal/01001000')json={street:'Praça da Sé',city:'São Paulo',district:'Sé',state:'SP',lat:-23.55,lng:-46.63};
-  else if(path.startsWith('/api/pickup-history'))json={items:[{street:'Rua Boa Vista',number:'45',cep:'01014-000',city:'São Paulo',state:'SP',visited_at:'2026-11-10T12:00:00Z'}]};
+  else if(path.startsWith('/api/pickup-history'))json={items:[{street:'Rua Boa Vista',number:'45',cep:'01014-000',city:'São Paulo',state:'SP',contact_name:'Portaria',phone:'(11) 90000-0000',whatsapp:true,visited_at:'2026-11-10T12:00:00Z'}]};
   else if(path==='/api/drivers')json={items:[{id:'driver-1',name:'Motorista'}]};
   else if(path==='/api/requests'&&request.method()==='POST'){sentRequest=request.postDataJSON();json={id:501};}
   else if(path==='/api/requests')json={items:requests};
@@ -117,12 +117,20 @@ try{
  assert.equal(await form.evaluate(el=>new FormData(el).has('pickup_street')),false);
  await form.locator('.modal-close').first().click();await page.evaluate(()=>openRequestModal(state.pevs.find(p=>p.requires_pickup_address)));
  assert.equal(await fields.locator('[name=pickup_street]').inputValue(),'');
- await fields.locator('summary').click();await fields.getByText('Usar endereço').click();
+ const history=fields.getByLabel('Locais já visitados');
+ await history.selectOption('0');
+ assert.equal(await fields.getByLabel('Telefone do responsável').inputValue(),'(11) 90000-0000');
+ assert.equal(await fields.getByLabel('Este número tem WhatsApp').isChecked(),true);
  assert.equal(await fields.locator('[name=pickup_number]').inputValue(),'45');
  await fields.locator('[name=pickup_cep]').fill('01001-000');
  await page.waitForFunction(()=>document.querySelector('[name=pickup_street]').value==='Praça da Sé');
  assert.match(await fields.innerText(),/Referência do CEP: -23.55000, -46.63000/);
+ assert.equal(await history.inputValue(),'');
+ assert.equal(await fields.getByLabel('Telefone do responsável').inputValue(),'');
  await fields.locator('[name=pickup_number]').fill('120');
+ await history.selectOption('0');
+ await fields.getByLabel('Responsável no local').fill('Recepção');
+ await fields.getByLabel('Telefone do responsável').fill('(11) 90000-0001');
  assert.equal(await form.evaluate(el=>el.checkValidity()),true);
  if(process.env.ROTA_QA_SCREENSHOTS){
   await page.setViewportSize({width:1280,height:1024});
@@ -133,7 +141,8 @@ try{
   await fields.screenshot({path:process.env.ROTA_QA_SCREENSHOTS+'/meta-celular.png'});
  }
  await form.getByRole('button',{name:'Enviar solicitação'}).click();await form.waitFor({state:'hidden'});
- assert.deepEqual([sentRequest.pickup_cep,sentRequest.pickup_street,sentRequest.pickup_number],['01001-000','Praça da Sé','120']);
+ assert.deepEqual([sentRequest.pickup_cep,sentRequest.pickup_street,sentRequest.pickup_number],['01014-000','Rua Boa Vista','45']);
+ assert.deepEqual([sentRequest.pickup_contact_name,sentRequest.pickup_phone,sentRequest.pickup_whatsapp],['Recepção','(11) 90000-0001','1']);
  await page.setViewportSize({width:1440,height:900});
  // Separate stops retain their own address, request ID and service type through optimization and save.
  for(const [id,street,number] of [[501,'Praça da Sé','120'],[502,'Rua Boa Vista','45']]){
@@ -153,14 +162,15 @@ try{
  assert.deepEqual(savedRoute.stops.map(s=>[s.pev_id,s.request_id,s.service_type]),[[88,501,'collection'],[88,502,'collection']]);
  await page.locator('#modal .modal-close').first().click();
  const stop={...route.stops[1],id:130,sequence:1,pev_id:88,pev_name:'Meta Reciclagem',requires_pickup_address:true,
-   pickup_address:{street:'Praça da Sé'},street:'Praça da Sé',number:'120',cep:'01001-000',district:'Sé',city:'São Paulo',state:'SP',
-   lat:-23.55,lng:-46.63,service_type:'collection',location_confirmed:false,contact_name:null,phone:null,contact_role:null};
+   pickup_address:{street:sentRequest.pickup_street},street:sentRequest.pickup_street,number:sentRequest.pickup_number,cep:sentRequest.pickup_cep,district:'Sé',city:'São Paulo',state:'SP',
+   lat:-23.55,lng:-46.63,service_type:'collection',location_confirmed:false,contact_name:sentRequest.pickup_contact_name,phone:sentRequest.pickup_phone,whatsapp:true,contact_role:null};
  await page.evaluate(({route,stop})=>{state.user.role='driver';drawDriverRoute({...route,stops:[stop],evidences:[{stop_id:stop.id,evidence_type:'stop_location'}]});},{route,stop});
  assert.equal(await page.locator('#completeStop').isEnabled(),true);
  assert.doesNotMatch(await page.locator('.next-stop').innerText(),/Foto do tambor/);
- assert.match(await page.locator('.next-stop').innerText(),/Praça da Sé, 120/);
+ assert.match(await page.locator('.next-stop').innerText(),/Rua Boa Vista, 45/);
+ assert.equal(await page.locator('.next-stop .driver-contact-whatsapp').getAttribute('href'),'https://wa.me/5511900000001');
  await page.evaluate(()=>window.open=url=>window.testNavigation=url);
- await page.locator('#googleNav').click();assert.match(decodeURIComponent(await page.evaluate(()=>window.testNavigation)),/Praça da Sé, 120/);
+ await page.locator('#googleNav').click();assert.match(decodeURIComponent(await page.evaluate(()=>window.testNavigation)),/Rua Boa Vista, 45/);
  if(process.env.ROTA_QA_SCREENSHOTS)await page.locator('.next-stop').screenshot({path:process.env.ROTA_QA_SCREENSHOTS+'/meta-motorista.png'});
  assert.equal(errors.length,0,errors.join('\n'));
  // Validate the generated ZIP against Python's standard reader (including UTF-8 names and CRC).
