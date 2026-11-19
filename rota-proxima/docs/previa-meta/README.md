@@ -1,7 +1,9 @@
 # Coleta da Meta Reciclagem
 
-Ao abrir **Solicitações → Nova solicitação** e escolher a Meta Reciclagem, o Comercial informa o CEP, a rua e o número da coleta. A partir de **PEVs / Locais → Solicitar**, o formulário já abre com essa PEV selecionada. Para as demais PEVs, o formulário continua usando o endereço do cadastro.
+No formulário do Comercial, o CEP preenche a rua e mostra a referência geográfica disponível. O Comercial confere a rua e informa o número. Um CEP genérico permite digitar a rua. O destino da parada vem da solicitação; o sistema calcula as coordenadas no planejamento, e a navegação usa o endereço completo para não tratar o centro do CEP como a entrada do imóvel.
 
-Cada solicitação tem seu próprio endereço. Se houver dois locais da Meta na mesma rota, cada um aparece como uma parada, com seu horário, prioridade e atendimento. O motorista recebe o endereço da respectiva parada para abrir o Google Maps ou o Waze.
+Em **Locais já visitados**, o Comercial pode reutilizar endereços de visitas da sua carteira. O motorista consulta visitas das próprias rotas em **Histórico**, inclusive sem rota ativa. São exibidos até 30 locais distintos, por visita mais recente. Se uma visita antiga registrou apenas GPS de chegada, é possível ver o ponto, mas não reutilizar um endereço presumido.
 
-**Publicação:** aplicar primeiro a migração incremental `20261119171426_meta_pickup_address.sql` no banco correto e publicar a aplicação na mesma janela. Entre a migração e a nova versão, o formulário antigo não consegue criar solicitações da Meta sem endereço. Solicitações e rotas anteriores à mudança continuam usando o endereço do cadastro. Nenhum endereço anterior é inferido.
+A Meta só entra no planejamento por solicitação com endereço e sempre como coleta. Cada solicitação é uma parada independente. O motorista precisa da foto do local; não há entrega, instalação nem foto de tambor. As demais PEVs mantêm as regras anteriores.
+
+**Publicação:** aplicar a migração do PR, `20261119171426_meta_pickup_address.sql`, antes do novo código, na mesma janela. Entre as etapas, o formulário antigo não cria solicitações da Meta sem endereço. Solicitações pendentes anteriores sem endereço precisam ser refeitas pelo Comercial. Uma parada antiga sem endereço solicitado nunca mostra a sede como destino.

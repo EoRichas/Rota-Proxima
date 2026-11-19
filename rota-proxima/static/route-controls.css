@@ -37,3 +37,10 @@
 .pickup-fields p { margin:0 0 12px; color:#405e54; font-size:.88rem; }
 .pickup-inputs { display:grid; grid-template-columns:minmax(100px,1fr) minmax(140px,2fr) minmax(85px,.8fr); gap:12px; }
 @media(max-width:600px){ .pickup-inputs { grid-template-columns:minmax(0,1fr); gap:8px; } }
+.pickup-history { margin:8px 0 14px; }
+.pickup-history summary { color:#175f4a; font-weight:650; cursor:pointer; }
+.pickup-visits { display:grid; gap:8px; margin-top:8px; max-height:240px; overflow:auto; }
+.pickup-visits > div { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 0; border-top:1px solid #d5e6de; }
+.pickup-postal-status:not(:empty){display:block;margin-top:10px;color:#405e54;}
+
+.driver-evidence-grid > :only-child {grid-column:1/-1;}

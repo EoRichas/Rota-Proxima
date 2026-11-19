@@ -793,9 +793,44 @@ def pickup_for_request(pev, data):
             'city': postal['city'], 'state': postal['state'], 'district': postal.get('district') or ''}
 
 
+def pickup_history(token, user, pev_id):
+    # RLS is preserved; scope explicitly to the commercial portfolio / driver's routes too.
+    criteria = {'pevs.requires_pickup_address': 'eq.true',
+        'or': '(arrived_at.not.is.null,and(status.eq.completed,completed_lat.not.is.null))',
+        'select': 'id,arrived_at,completed_at,arrived_lat,arrived_lng,pickup_address,pevs!inner(id)',
+        'order': 'id.desc'}
+    if pev_id is not None:criteria['pev_id']=f'eq.{pev_id}'
+    if user['role'] == 'commercial':
+        criteria['pevs.commercial_owner_id'] = f'eq.{user["id"]}'
+    elif user['role'] == 'driver':
+        criteria['select'] += ',routes!inner(id)'
+        criteria['routes.driver_id'] = f'eq.{user["id"]}'
+    else:
+        raise ValueError('Sem permissão')
+    rows = Supa.get('route_stops', token, criteria)
+    seen, items = set(), []
+    for row in sorted(rows, key=lambda r:r.get('arrived_at') or r.get('completed_at') or '', reverse=True):
+        address = row.get('pickup_address') or {}
+        if address:
+            key = (clean_cep(address.get('cep')),str(address.get('street')).strip().casefold(),str(address.get('number')).strip().casefold())
+            place = {k: address.get(k) for k in ('cep','street','number','district','city','state','lat','lng')}
+        elif row.get('arrived_lat') is not None and row.get('arrived_lng') is not None:
+            # Legacy: GPS at arrival is known; the address at the time is not.
+            key = (round(row['arrived_lat'],5),round(row['arrived_lng'],5))
+            place = {'lat':row['arrived_lat'], 'lng':row['arrived_lng']}
+        else:
+            continue
+        if key not in seen:
+            seen.add(key)
+            items.append({**place,'visited_at': row.get('arrived_at') or row.get('completed_at')})
+        if len(items)==30:break
+    return items
+
+
 def at_pickup(pev, address):
-    if not address:
+    if not address and not pev.get('requires_pickup_address'):
         return pev
+    address = address or {}
     # Never inherit a fixed entrance, complement or coordinates from the PEV.
     return {**pev, **{k: address.get(k) for k in
             ('street','number','district','city','state','cep','complement','lat','lng')},
@@ -823,6 +858,11 @@ def planning_locations(token, ids, stops):
         if pid not in by_id:
             raise ValueError('PEV não disponível para planejamento.')
         pev = by_id[pid]
+        if pev.get('requires_pickup_address'):
+            if not (requests_by_id.get(int(stop.get('request_id') or 0)) or {}).get('pickup_address'):
+                raise ValueError('Para a Meta, selecione uma solicitação com endereço de coleta.')
+            if stop.get('service_type') not in (None,'','collection'):
+                raise ValueError('A Meta Reciclagem aceita somente coleta.')
         if stop.get('request_id'):
             req = requests_by_id.get(int(stop['request_id']))
             if not req or req['pev_id'] != pid:
@@ -834,7 +874,7 @@ def planning_locations(token, ids, stops):
                         geo = geocode_address_detailed(address)
                     except ValueError as exc:
                         raise ValueError('Não foi possível localizar o endereço da solicitação de coleta no mapa.') from exc
-                    address = {**address, 'lat': geo['lat'], 'lng': geo['lng']}
+                    address = {**address, 'lat': geo['lat'], 'lng': geo['lng'], 'geo_source': geo.get('source')}
                     updated = Supa.update('scheduling_requests', token,
                         {'id': f'eq.{req["id"]}', 'status': 'eq.pending'}, {'pickup_address': address})
                     if not updated:
@@ -876,7 +916,7 @@ def get_route_full(token,route_id):
     mapped=[]
     for s in stops:
         p=at_pickup(s.pop('pevs',{}) or {},s.get('pickup_address'));rq=s.pop('scheduling_requests',{}) or {}
-        x={**s,'pev_name':p.get('name'),'street':p.get('street'),'number':p.get('number'),'complement':p.get('complement'),'district':p.get('district'),'city':p.get('city'),'state':p.get('state'),'cep':p.get('cep'),'lat':p.get('lat'),'lng':p.get('lng'),'location_confirmed':p.get('location_confirmed'),'contact_name':p.get('contact_name'),'contact_role':p.get('contact_role'),'phone':p.get('phone'),'whatsapp':p.get('whatsapp'),'notes':rq.get('notes') or '','window_start':s.get('window_start') or rq.get('window_start') or '','window_end':s.get('window_end') or rq.get('window_end') or '','exact_time':s.get('exact_time') or rq.get('exact_time') or ''}
+        x={**s,'requires_pickup_address':bool(p.get('requires_pickup_address')),'pev_name':p.get('name'),'street':p.get('street'),'number':p.get('number'),'complement':p.get('complement'),'district':p.get('district'),'city':p.get('city'),'state':p.get('state'),'cep':p.get('cep'),'lat':p.get('lat'),'lng':p.get('lng'),'location_confirmed':p.get('location_confirmed'),'contact_name':p.get('contact_name'),'contact_role':p.get('contact_role'),'phone':p.get('phone'),'whatsapp':p.get('whatsapp'),'notes':rq.get('notes') or '','window_start':s.get('window_start') or rq.get('window_start') or '','window_end':s.get('window_end') or rq.get('window_end') or '','exact_time':s.get('exact_time') or rq.get('exact_time') or ''}
         mapped.append(x)
     out['stops']=mapped;out['weighings']=route_weighings(token,route_id);out['evidences']=route_evidences(token,route_id);loc=Supa.get('driver_location_updates',token,{'route_id':f'eq.{route_id}','select':'lat,lng,accuracy_m,recorded_at','order':'recorded_at.desc','limit':'1'}) or [];out['last_location']=loc[0] if loc else None;out['schedule_warnings']=schedule_conflicts(mapped);out['timeline']=route_timeline(token,out);return out
 
@@ -911,6 +951,8 @@ def reorder_route_for_exact_times(token,route_id,start_lat=None,start_lng=None,l
     for s in pending:
         if s.get('lat') is not None and s.get('lng') is not None:
             points.append((float(s['lat']),float(s['lng'])))
+        elif s.get('requires_pickup_address'):
+            raise ValueError('A parada da Meta não tem endereço de coleta registrado.')
         else:
             p=first(Supa.get('pevs',token,{'id':f'eq.{s["pev_id"]}','select':'*'}))
             points.append(ensure_pev_coords(token,p))
@@ -1136,6 +1178,15 @@ class AppHandler(BaseHTTPRequestHandler):
             if not u:return
             if path=='/api/presence':return self.send_json({'ok':True,'online':True,'expires_in':_USER_PRESENCE_TTL})
             t=self.token();role=u['role'];q=self.query()
+            if re.fullmatch(r'/api/pickup-history(?:/[0-9]+)?',path):
+                if role not in ('commercial','driver'):return self.send_json({'error':'Sem permissão'},403)
+                return self.send_json({'items':pickup_history(t,u,int(path.split('/')[3]) if path.count('/')==3 else None)})
+            if re.fullmatch(r'/api/pickup-postal/[0-9]{8}',path):
+                if role!='commercial':return self.send_json({'error':'Sem permissão'},403)
+                cep=path.rsplit('/',1)[1]
+                postal=viacep_lookup(cep)
+                coords=_brasilapi_cep_coords(cep)
+                return self.send_json({**postal,'lat':coords[0] if coords else None,'lng':coords[1] if coords else None})
             if path=='/api/settings':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json(first(Supa.get('settings',t,{'id':'eq.1','select':'*'})))
@@ -1496,15 +1547,17 @@ class AppHandler(BaseHTTPRequestHandler):
                     return self.send_json(result or {'ok':True})
             if path.startswith('/api/stops/') and method=='POST':
                 parts=path.strip('/').split('/');sid=int(parts[2]);action=parts[3]
-                stop=first(Supa.get('route_stops',t,{'id':f'eq.{sid}','select':'id,route_id,pev_id,status,service_type'}))
+                stop=first(Supa.get('route_stops',t,{'id':f'eq.{sid}','select':'id,route_id,pev_id,status,service_type,pevs(requires_pickup_address)'}))
                 if not stop:return self.send_json({'error':'Parada não encontrada'},404)
                 route_id=int(stop['route_id'])
+                collection_only=bool((stop.get('pevs') or {}).get('requires_pickup_address'))
                 if action=='evidence':
                     if role!='driver':return self.send_json({'error':'Sem permissão'},403)
                     if stop.get('status') not in ('pending','arrived'):return self.send_json({'error':'Esta parada já foi encerrada'},409)
                     route=first(Supa.get('routes',t,{'id':f'eq.{route_id}','select':'id,status,driver_id','limit':'1'}))
                     if not route or route.get('status')!='in_progress' or route.get('driver_id')!=u['id']:return self.send_json({'error':'Esta rota não está disponível para registrar fotos'},409)
                     evtype=str(data.get('evidence_type') or '')
+                    if evtype=='drum' and collection_only:return self.send_json({'error':'Esta coleta não usa tambor'},400)
                     if evtype not in ('stop_location','drum'):return self.send_json({'error':'Tipo de evidência inválido para esta parada'},400)
                     existing=Supa.get('route_evidences',t,{'stop_id':f'eq.{sid}','evidence_type':f'eq.{evtype}','select':'id','limit':'1'})
                     if existing:return self.send_json({'error':'Esta foto obrigatória já foi registrada'},409)
@@ -1530,7 +1583,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     present={item.get('evidence_type') for item in evidences}
                     missing=[]
                     if 'stop_location' not in present:missing.append('foto do local')
-                    if 'drum' not in present:missing.append('foto do tambor')
+                    if not collection_only and 'drum' not in present:missing.append('foto do tambor')
                     if missing:return self.send_json({'error':f'Adicione a {" e a ".join(missing)} antes de encerrar esta parada'},409)
                 result=Supa.rpc('update_stop_atomic',t,{'p_stop_id':sid,'p_action':action,'p_data':data})
                 return self.send_json(try_auto_finish_route(t,u,int(result['route_id']),data.get('lat'),data.get('lng')))

@@ -475,7 +475,7 @@ async function openPevModal(pev=null) {
       <label class="field"><span>Telefone</span><input name="phone" value="${esc(p.phone||'')}" placeholder="(15) 99999-9999"></label>
       <label class="field"><span>Contato tem WhatsApp?</span><select name="whatsapp"><option value="1" ${p.whatsapp?'selected':''}>Sim</option><option value="0" ${!p.whatsapp?'selected':''}>Não</option></select></label>
       <div class="span-2"><hr><h3>Organização</h3></div>
-      ${state.user.role==='admin'?`<label class="field"><span>Tambor instalado no local</span><select name="drum_installed"><option value="0" ${!p.drum_installed?'selected':''}>Não — próximo atendimento: Entrega</option><option value="1" ${p.drum_installed?'selected':''}>Sim — próximo atendimento: Coleta</option></select></label>`:''}<label class="field"><span>Favorito</span><select name="favorite"><option value="1" ${p.favorite?'selected':''}>Sim</option><option value="0" ${!p.favorite?'selected':''}>Não</option></select></label>
+      ${state.user.role==='admin'&&!p.requires_pickup_address?`<label class="field"><span>Tambor instalado no local</span><select name="drum_installed"><option value="0" ${!p.drum_installed?'selected':''}>Não — próximo atendimento: Entrega</option><option value="1" ${p.drum_installed?'selected':''}>Sim — próximo atendimento: Coleta</option></select></label>`:''}<label class="field"><span>Favorito</span><select name="favorite"><option value="1" ${p.favorite?'selected':''}>Sim</option><option value="0" ${!p.favorite?'selected':''}>Não</option></select></label>
       <div class="span-2"><hr><h3>Localização confirmada (opcional)</h3><p class="muted">Útil para área rural, condomínio grande ou cidade com CEP genérico. Se preenchida, a rota usa estas coordenadas acima do endereço.</p></div>
       <label class="field"><span>Latitude</span><input name="lat" inputmode="decimal" value="${p.lat??''}" placeholder="-23.500000"></label>
       <label class="field"><span>Longitude</span><input name="lng" inputmode="decimal" value="${p.lng??''}" placeholder="-47.450000"></label>
@@ -547,6 +547,8 @@ function planSelectedRequests(){
   if(state.user.role!=='admin') return;
   const ids=$$('.request-select:checked').map(x=>Number(x.value)); if(!ids.length)return toast('Selecione pelo menos uma solicitação.','error');
   const reqs=state.requests.filter(r=>ids.includes(r.id));
+  if(reqs.some(r=>!r.pickup_address&&state.pevs.find(p=>p.id===r.pev_id)?.requires_pickup_address))
+    return toast('A solicitação antiga da Meta não tem endereço. Peça ao Comercial uma nova solicitação.','error');
   state.requestSelection=reqs;
   go('planner');
 }
@@ -559,11 +561,13 @@ function openRequestModal(pev=null){
     <fieldset id="pickupFields" class="pickup-fields span-2" hidden disabled>
       <legend>Onde será a coleta?</legend>
       <p>Informe o endereço desta solicitação. O cadastro da PEV continua igual.</p>
+      <div class="pickup-history-host"></div>
       <div class="pickup-inputs">
         <label class="field"><span>CEP *</span><input name="pickup_cep" inputmode="numeric" maxlength="9" pattern="[0-9]{5}-?[0-9]{3}" placeholder="00000-000" required></label>
         <label class="field"><span>Rua *</span><input name="pickup_street" maxlength="160" placeholder="Nome da rua" required></label>
         <label class="field"><span>Número *</span><input name="pickup_number" maxlength="20" placeholder="Nº ou s/n" required></label>
       </div>
+      <small class="pickup-postal-status" role="status"></small>
     </fieldset>
     <label class="field"><span>Data solicitada *</span><input type="date" name="requested_date" value="${today}" required></label><label class="field"><span>Prioridade</span><select name="priority">${priorityOptions('normal')}</select></label>
     <label class="field span-2"><span>Horário específico para esta coleta</span><input type="time" name="exact_time"><small class="muted">Opcional e válido somente para esta solicitação.</small></label>
@@ -572,14 +576,7 @@ function openRequestModal(pev=null){
     <label class="field span-2"><span>Observações para o agendamento</span><textarea name="notes" placeholder="Ex.: cliente pediu coleta pela manhã, ligar antes de ir..."></textarea></label>
     <label class="field span-2"><span>Observação interna</span><textarea name="internal_notes" placeholder="Informação interna, não exibida ao motorista"></textarea></label>
   </div><div class="form-actions"><button type="button" class="btn ghost modal-close">Cancelar</button><button class="btn primary">Enviar solicitação</button></div></form>`);
-  const form=$('#requestForm'), fields=$('#pickupFields');
-  function syncPickup() {
-    const selected=state.pevs.find(p=>String(p.id)===form.elements.pev_id.value);
-    fields.hidden=fields.disabled=!selected?.requires_pickup_address;
-    for(const input of fields.querySelectorAll('input')) input.value='';
-  }
-  form.elements.pev_id.addEventListener('change',syncPickup);
-  syncPickup();
+  setupPickupRequest($('#requestForm'),state.pevs);
   $('#requestForm').onsubmit=async e=>{e.preventDefault();const form=e.target;try{await api('/api/requests',{method:'POST',body:Object.fromEntries(new FormData(form))});form.reset();$('#modal').close();toast('Solicitação enviada. Os dados temporários foram limpos.','success');go('requests');}catch(err){toast(err.message,'error');}};
 }
 
@@ -621,7 +618,7 @@ async function renderPlanner() {
   const plannerRows=state.pevs.flatMap(p=>{
     const pickups=selectedRequests.filter(r=>r.pev_id===p.id && r.pickup_address);
     const rows=pickups.map(r=>({...p,...r.pickup_address,id:-r.id}));
-    if(!pickups.length || requestByPev[p.id]) rows.push(p);
+    if(!p.requires_pickup_address && (!pickups.length || requestByPev[p.id])) rows.push(p);
     return rows;
   });
   const today = selectedRequests.length ? selectedRequests.map(r=>r.requested_date).sort()[0] : new Date().toISOString().slice(0,10);
@@ -652,7 +649,7 @@ async function renderPlanner() {
   plannerRows.forEach(p=>{
     const rq=requestByPev[p.id];
     state.plannerPriorities[p.id]=rq?.priority||p.default_priority||'normal';
-    state.plannerServiceTypes[p.id]=p.drum_installed?'collection':'delivery';
+    state.plannerServiceTypes[p.id]=(p.requires_pickup_address||p.drum_installed)?'collection':'delivery';
     state.plannerExactTimes[p.id]=rq?.exact_time||'';
   });
   function updateSelectedCount(){
@@ -664,7 +661,7 @@ async function renderPlanner() {
     const q=$('#selectSearch').value.toLowerCase();
     const selected=plannerRows.filter(p=>state.plannerSelection.has(p.id));
     const items=plannerRows.filter(p=>!state.plannerSelection.has(p.id)&&(!favOnly||p.favorite)&&`${p.name} ${p.city} ${p.district}`.toLowerCase().includes(q));
-    const row=p=>`<div class="pev-check"><input type="checkbox" data-id="${p.id}" ${state.plannerSelection.has(p.id)?'checked':''}><div class="pev-check-main"><div class="name">${p.favorite?'★ ':''}${esc(p.name)}</div><div class="addr">${esc(p.street)}, ${esc(p.number||'s/n')} • ${esc(p.city)}/${esc(p.state)}</div></div><label class="planner-control"><span>Atendimento</span><select class="pev-service-type" data-id="${p.id}"><option value="collection" ${state.plannerServiceTypes[p.id]==='collection'?'selected':''}>Coleta</option><option value="delivery" ${state.plannerServiceTypes[p.id]==='delivery'?'selected':''}>Entrega</option></select></label><label class="planner-control"><span>Horário</span><input class="pev-exact-time" data-id="${p.id}" type="time" value="${esc(state.plannerExactTimes[p.id]||'')}"></label><label class="planner-control"><span>Prioridade</span><select class="pev-priority" data-id="${p.id}">${priorityOptions(state.plannerPriorities[p.id]||requestByPev[p.id]?.priority||p.default_priority)}</select></label></div>`;
+    const row=p=>`<div class="pev-check"><input type="checkbox" data-id="${p.id}" ${state.plannerSelection.has(p.id)?'checked':''}><div class="pev-check-main"><div class="name">${p.favorite?'★ ':''}${esc(p.name)}</div><div class="addr">${esc(p.street)}, ${esc(p.number||'s/n')} • ${esc(p.city)}/${esc(p.state)}</div></div><label class="planner-control"><span>Atendimento</span><select class="pev-service-type" data-id="${p.id}" ${p.requires_pickup_address?'disabled':''}><option value="collection" ${state.plannerServiceTypes[p.id]==='collection'?'selected':''}>Coleta</option>${p.requires_pickup_address?'':`<option value="delivery" ${state.plannerServiceTypes[p.id]==='delivery'?'selected':''}>Entrega</option>`}</select></label><label class="planner-control"><span>Horário</span><input class="pev-exact-time" data-id="${p.id}" type="time" value="${esc(state.plannerExactTimes[p.id]||'')}"></label><label class="planner-control"><span>Prioridade</span><select class="pev-priority" data-id="${p.id}">${priorityOptions(state.plannerPriorities[p.id]||requestByPev[p.id]?.priority||p.default_priority)}</select></label></div>`;
     $('#selectedPevs').innerHTML=selected.length?`<div class="selected-pevs-heading">Selecionados <span>${selected.length}</span></div>${selected.map(row).join('')}`:'';
     $('#pevSelector').innerHTML=items.map(row).join('')||'<div class="empty">Nenhum outro PEV neste filtro.</div>';
     $$('.pev-check input[type=checkbox]').forEach(x=>x.onchange=()=>{
@@ -885,7 +882,8 @@ async function renderAgenda() {
 
 async function renderHistory(){
   const routes=(await api('/api/routes')).items.filter(r=>r.status==='finished');
-  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">${state.user.role==='quality'?'Qualidade':'Motorista'}</span><h1>Histórico de rotas</h1><p class="muted">Consulta das rotas finalizadas.</p></div></div><div class="card">${routeListHtml(routes)}</div>`; bindRouteOpeners();
+  $('#page').innerHTML=`<div class="page-head"><div><span class="eyebrow">${state.user.role==='quality'?'Qualidade':'Motorista'}</span><h1>Histórico de rotas</h1><p class="muted">Consulta das rotas finalizadas.</p></div></div>${state.user.role==='driver'?`<section class="card"><h2>Meta Reciclagem</h2>${pickupHistoryMarkup()}</section>`:''}<div class="card">${routeListHtml(routes)}</div>`; bindRouteOpeners();
+  if(state.user.role==='driver')bindPickupHistory($('.pickup-history'),null);
 }
 
 
@@ -953,16 +951,22 @@ function driverContactHtml(stop,compact=false){
   return `<div class="driver-contact${compact?' driver-contact-compact':''}"><div class="driver-contact-name"><strong>Responsável:</strong> ${name?esc(name):'Não informado'}${role?` <span class="muted">• ${esc(role)}</span>`:''}</div>${hasPhone?`<div class="driver-contact-actions"><a class="driver-contact-phone" href="${phoneHref(phone)}" aria-label="Ligar para o responsável: ${esc(phone)}">${esc(phone)}</a>${whatsapp?`<a class="btn success small driver-contact-whatsapp" href="${whatsHref(phone)}" target="_blank" rel="noopener noreferrer">WhatsApp</a>`:''}</div>`:'<span class="muted">Telefone não informado</span>'}</div>`;
 }
 function driverNextStopHtml(s,route){
-  const addr=`${esc(s.street)}, ${esc(s.number||'s/n')}${s.complement?` - ${esc(s.complement)}`:''}<br>${s.district?`${esc(s.district)} • `:''}${esc(s.city)}/${esc(s.state)}`;
+  const missing=s.requires_pickup_address&&!s.pickup_address;
+  const addr=missing?'Endereço de coleta não registrado. Confirme com o Comercial antes de sair.':`${esc(s.street)}, ${esc(s.number||'s/n')}${s.complement?` - ${esc(s.complement)}`:''}<br>${s.district?`${esc(s.district)} • `:''}${esc(s.city)}/${esc(s.state)}`;
   const evidenceBox=(type,label,description)=>{const done=hasStopEvidence(route,s,type);return `<div class="evidence-box ${done?'evidence-ok':''}"><strong>${label} *</strong><p class="muted">${description}</p>${done?'<div class="success-note">✓ Evidência registrada</div>':`<div class="evidence-actions"><label class="btn secondary">📷 Tirar foto<input class="hidden-file stop-evidence-input" data-evidence-type="${type}" type="file" accept="image/*" capture="environment"></label><label class="btn ghost">⬆ Fazer upload<input class="hidden-file stop-evidence-input" data-evidence-type="${type}" type="file" accept="image/*"></label></div><div class="evidence-uploading muted" data-evidence-status="${type}" aria-live="polite"></div>`}</div>`};
-  const hasLocation=hasStopEvidence(route,s,'stop_location'),hasDrum=hasStopEvidence(route,s,'drum'),hasRequiredEvidence=hasLocation&&hasDrum;
-  return `<div class="card next-stop"><span class="eyebrow">Próxima parada • ${s.sequence}</span><h2>${esc(s.pev_name)}</h2><div class="next-stop-address">${addr}</div>${driverContactHtml(s)}<div class="info"><strong>Tipo de atendimento: ${esc(serviceTypeLabel[s.service_type||'collection'])}</strong></div>${s.exact_time?`<div class="warning"><strong>Horário específico: ${esc(s.exact_time)}</strong></div>`:''}<div class="driver-evidence-grid">${evidenceBox('stop_location','Foto do local','Obrigatória para comprovar o local da parada.')}${evidenceBox('drum','Foto do tambor','Obrigatória para comprovar o tambor da parada.')}</div><div class="driver-actions"><button id="googleNav" class="btn blue">Google Maps</button><button id="wazeNav" class="btn secondary">Waze</button>${s.status==='pending'?'<button id="arriveStop" class="btn secondary full">Cheguei ao local</button>':''}<button id="completeStop" class="btn success full" ${hasRequiredEvidence?'':'disabled'}>✓ Finalizar parada</button><button id="failStop" class="btn danger" ${hasRequiredEvidence?'':'disabled'}>Não realizada</button><button id="recalcRoute" class="btn ghost">Recalcular restante</button></div></div>`;
+  const hasLocation=hasStopEvidence(route,s,'stop_location'),hasDrum=hasStopEvidence(route,s,'drum'),hasRequiredEvidence=hasLocation&&(s.requires_pickup_address||hasDrum);
+  return `<div class="card next-stop"><span class="eyebrow">Próxima parada • ${s.sequence}</span><h2>${esc(s.pev_name)}</h2><div class="next-stop-address">${addr}</div>${s.pickup_address?`<div class="stop-meta">Endereço solicitado · CEP ${esc(s.cep)}<br>Coordenadas aproximadas: ${esc(pickupCoords(s))}</div>`:''}${driverContactHtml(s)}<div class="info"><strong>Tipo de atendimento: ${esc(serviceTypeLabel[s.service_type||'collection'])}</strong></div>${s.exact_time?`<div class="warning"><strong>Horário específico: ${esc(s.exact_time)}</strong></div>`:''}<div class="driver-evidence-grid">${evidenceBox('stop_location','Foto do local','Obrigatória para comprovar o local da parada.')}${s.requires_pickup_address?'':evidenceBox('drum','Foto do tambor','Obrigatória para comprovar o tambor da parada.')}</div><div class="driver-actions"><button id="googleNav" ${missing?'disabled':''} class="btn blue">Google Maps</button><button id="wazeNav" ${missing?'disabled':''} class="btn secondary">Waze</button>${s.status==='pending'?'<button id="arriveStop" class="btn secondary full">Cheguei ao local</button>':''}<button id="completeStop" class="btn success full" ${hasRequiredEvidence?'':'disabled'}>✓ Finalizar parada</button><button id="failStop" class="btn danger" ${hasRequiredEvidence?'':'disabled'}>Não realizada</button><button id="recalcRoute" class="btn ghost">Recalcular restante</button></div></div>`;
 }
 function drawDriverRoute(r){
   const done=r.stops.filter(s=>['completed','failed','skipped'].includes(s.status)).length,total=r.stops.length,next=r.stops.find(s=>['pending','arrived'].includes(s.status)),pct=total?Math.round(done/total*100):0;
   if(r.status==='in_progress'&&next)startDriverLocationWatch(r.id);else stopDriverLocationWatch();
-  $('#page').innerHTML=`<div class="driver-page"><div class="driver-hero"><span class="eyebrow">${statusLabel[r.status]}</span><h1>${esc(r.name)}</h1><p>${fmtDate(r.route_date)} • ${done} de ${total} paradas encerradas</p><div class="driver-progress"><span style="width:${pct}%"></span></div></div>${r.status==='released'?`<div class="card next-stop"><h2>Rota pronta</h2><p class="muted">Ao iniciar, registraremos data, hora e sua localização.</p><button id="startRoute" class="btn success wide">Iniciar rota</button></div>`:''}${r.status==='in_progress'&&next?driverNextStopHtml(next,r):''}${r.status==='in_progress'&&!next?driverProductionWaitingHtml(r):''}${r.status==='finished'?`<div class="card"><h2>Rota finalizada</h2><p class="muted">Encerramento automático concluído${r.finished_at?` • ${fmtDateTime(r.finished_at)}`:''}.</p></div>`:''}<div class="card driver-sequence-card"><h2>Sequência</h2><div class="timeline">${r.stops.map(s=>`<div class="timeline-item"><div class="timeline-dot ${s.status==='completed'?'done':s.status==='failed'?'bad':''}">${s.status==='completed'?'✓':s.status==='failed'?'!':s.sequence}</div><div><strong>${esc(s.pev_name)}</strong><div class="stop-meta">${esc(serviceTypeLabel[s.service_type||'collection'])}${s.collected_weight_kg?` • ${Number(s.collected_weight_kg).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})} kg`:''}</div>${driverContactHtml(s,true)}</div><span class="badge ${s.status==='failed'?'failed':s.priority}">${s.status==='completed'?'Feita':s.status==='failed'?'Não feita':priorityLabel[s.priority]}</span></div>`).join('')}</div></div></div>`;
+  $('#page').innerHTML=`<div class="driver-page"><div class="driver-hero"><span class="eyebrow">${statusLabel[r.status]}</span><h1>${esc(r.name)}</h1><p>${fmtDate(r.route_date)} • ${done} de ${total} paradas encerradas</p><div class="driver-progress"><span style="width:${pct}%"></span></div></div>${r.status==='released'?`<div class="card next-stop"><h2>Rota pronta</h2><p class="muted">Ao iniciar, registraremos data, hora e sua localização.</p><button id="startRoute" class="btn success wide">Iniciar rota</button></div>`:''}${r.status==='in_progress'&&next?driverNextStopHtml(next,r):''}${r.status==='in_progress'&&!next?driverProductionWaitingHtml(r):''}${r.status==='finished'?`<div class="card"><h2>Rota finalizada</h2><p class="muted">Encerramento automático concluído${r.finished_at?` • ${fmtDateTime(r.finished_at)}`:''}.</p></div>`:''}<div class="card driver-sequence-card"><h2>Sequência</h2><div class="timeline">${r.stops.map(s=>`<div class="timeline-item"><div class="timeline-dot ${s.status==='completed'?'done':s.status==='failed'?'bad':''}">${s.status==='completed'?'✓':s.status==='failed'?'!':s.sequence}</div><div><strong>${esc(s.pev_name)}</strong><div class="stop-meta">${esc(serviceTypeLabel[s.service_type||'collection'])}${s.collected_weight_kg?` • ${Number(s.collected_weight_kg).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})} kg`:''}</div>${s.requires_pickup_address?`<div class="stop-meta">${s.pickup_address?esc([s.street,s.number,s.city,s.cep].filter(Boolean).join(', ')):'Sem endereço solicitado'}</div>`:''}${driverContactHtml(s,true)}</div><span class="badge ${s.status==='failed'?'failed':s.priority}">${s.status==='completed'?'Feita':s.status==='failed'?'Não feita':priorityLabel[s.priority]}</span></div>`).join('')}</div></div></div>`;
   if($('#startRoute'))$('#startRoute').onclick=async()=>{try{const pos=await getPosition();const updated=await api(`/api/routes/${r.id}/start`,{method:'POST',body:{...pos,local_time:localHHMM()}});toast(updated.schedule_warnings?.length?updated.schedule_warnings[0]:'Rota iniciada e sequência ajustada pelo horário atual.',updated.schedule_warnings?.length?'error':'success');drawDriverRoute(updated);}catch(e){toast(e.message,'error')}};
+  const metaStop=r.stops.find(s=>s.requires_pickup_address);
+  if(metaStop){
+    const card=$('.driver-sequence-card');card.insertAdjacentHTML('beforeend',pickupHistoryMarkup());
+    bindPickupHistory(card.querySelector('.pickup-history'),metaStop.pev_id);
+  }
   if(next)bindDriverStopActions(r,next);
   installRouteReorder(r,$('#page'),updated=>drawDriverRoute(updated));
 }

@@ -41,3 +41,26 @@ class PickupAddressTests(unittest.TestCase):
             stop=server.get_route_full('driver',5)['stops'][0]
         self.assertEqual(('Rua Nova','12',3,4,'João'),tuple(stop[k] for k in ('street','number','lat','lng','contact_name')))
         self.assertFalse(stop['location_confirmed'])
+
+    def test_no_meta_destination_from_fixed_pev(self):
+        pev={'id':88,'requires_pickup_address':True,'street':'Sede','lat':1,'lng':2}
+        with patch.object(server.Supa,'get',return_value=[pev]), self.assertRaisesRegex(ValueError,'solicitação'):
+            server.planning_locations('token',[88],[])
+        masked=server.at_pickup(pev,None)
+        self.assertIsNone(masked['street'])
+        self.assertIsNone(masked['lat'])
+
+    def test_history_uses_visited_places_in_role_scope_and_not_assumed_addresses(self):
+        a={'cep':'01001-000','street':'Praça da Sé','number':'120'}
+        rows=[{'arrived_at':'2026-10-20','pickup_address':a},
+              {'arrived_at':'2026-11-02','pickup_address':a},
+              {'arrived_at':'2026-10-01','arrived_lat':-23.5,'arrived_lng':-47.1},
+              {'completed_at':'2026-09-01'}]
+        for role,key in [('driver','routes.driver_id'),('commercial','pevs.commercial_owner_id')]:
+            with patch.object(server.Supa,'get',return_value=rows) as get:
+                result=server.pickup_history('token',{'id':'me','role':role},88)
+            self.assertEqual(get.call_args.args[2][key],'eq.me')
+            self.assertEqual(get.call_args.args[2]['pevs.requires_pickup_address'],'eq.true')
+            self.assertEqual(len(result),2)
+            self.assertEqual(result[0]['visited_at'],'2026-11-02')
+            self.assertNotIn('street',result[1])
