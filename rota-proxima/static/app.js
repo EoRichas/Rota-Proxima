@@ -537,7 +537,7 @@ function drawRequestList(){
   });
   $('#requestList').innerHTML=items.length?`<div class="list">${items.map(r=>`<div class="list-item request-item">
     ${admin&&r.status==='pending'?`<input class="request-select" type="checkbox" value="${r.id}" aria-label="Selecionar ${esc(r.pev_name)}">`:''}
-    <div class="list-item-main"><strong>${esc(r.pev_name)}</strong><span>${fmtDate(r.requested_date)}${r.exact_time?` • ⏰ ${esc(r.exact_time)}`:(r.window_start||r.window_end?` • ${esc(r.window_start||'—')}–${esc(r.window_end||'—')}`:'')} • ${esc(r.city)}/${esc(r.state)}</span><span>Solicitado por: ${esc(r.requested_by_name)}${r.notes?` • ${esc(r.notes)}`:''}</span></div>
+    <div class="list-item-main"><strong>${esc(r.pev_name)}</strong><span>${fmtDate(r.requested_date)}${r.exact_time?` • ⏰ ${esc(r.exact_time)}`:(r.window_start||r.window_end?` • ${esc(r.window_start||'—')}–${esc(r.window_end||'—')}`:'')} • ${esc(r.city)}/${esc(r.state)}</span>${r.pickup_address?`<span>Coleta: ${esc(r.street)}, ${esc(r.number)} · CEP ${esc(r.cep)}</span>`:''}<span>Solicitado por: ${esc(r.requested_by_name)}${r.notes?` • ${esc(r.notes)}`:''}</span></div>
     <div class="actions"><span class="badge ${r.status}">${requestStatusLabel[r.status]||r.status}</span><span class="badge ${r.priority}">${priorityLabel[r.priority]}</span>${(admin||((manager||commercial)&&!r.route_id&&r.status==='pending'))?`<button class="btn danger small delete-request" data-id="${r.id}">Excluir</button>`:''}</div>
   </div>`).join('')}</div>`:'<div class="empty">Nenhuma solicitação encontrada.</div>';
   $$('.delete-request').forEach(b=>b.onclick=async()=>{if(!confirm('Excluir definitivamente esta solicitação?\n\nO Administrador pode excluir mesmo quando ela já fez parte da operação. Esta ação não pode ser desfeita.'))return;try{await api(`/api/requests/${b.dataset.id}`,{method:'DELETE',body:{}});toast('Solicitação excluída.','success');renderRequests();}catch(e){toast(e.message,'error');}});
@@ -556,6 +556,15 @@ function openRequestModal(pev=null){
   const today=new Date().toISOString().slice(0,10);
   modal(`<form id="requestForm" class="modal-box"><div class="modal-head"><div><span class="eyebrow">Agendamento</span><h2>Nova solicitação</h2></div><button type="button" class="icon-btn modal-close">×</button></div><div class="form-grid">
     <label class="field span-2"><span>PEV / Local *</span><select name="pev_id" required><option value="">Selecione</option>${state.pevs.map(p=>`<option value="${p.id}" ${pev&&pev.id===p.id?'selected':''}>${esc(p.name)} — ${esc(p.city)}/${esc(p.state)}</option>`).join('')}</select></label>
+    <fieldset id="pickupFields" class="pickup-fields span-2" hidden disabled>
+      <legend>Onde será a coleta?</legend>
+      <p>Informe o endereço desta solicitação. O cadastro da PEV continua igual.</p>
+      <div class="pickup-inputs">
+        <label class="field"><span>CEP *</span><input name="pickup_cep" inputmode="numeric" maxlength="9" pattern="[0-9]{5}-?[0-9]{3}" placeholder="00000-000" required></label>
+        <label class="field"><span>Rua *</span><input name="pickup_street" maxlength="160" placeholder="Nome da rua" required></label>
+        <label class="field"><span>Número *</span><input name="pickup_number" maxlength="20" placeholder="Nº ou s/n" required></label>
+      </div>
+    </fieldset>
     <label class="field"><span>Data solicitada *</span><input type="date" name="requested_date" value="${today}" required></label><label class="field"><span>Prioridade</span><select name="priority">${priorityOptions('normal')}</select></label>
     <label class="field span-2"><span>Horário específico para esta coleta</span><input type="time" name="exact_time"><small class="muted">Opcional e válido somente para esta solicitação.</small></label>
     <label class="field"><span>Período inicial</span><input type="time" name="window_start"></label><label class="field"><span>Período final</span><input type="time" name="window_end"></label>
@@ -563,6 +572,14 @@ function openRequestModal(pev=null){
     <label class="field span-2"><span>Observações para o agendamento</span><textarea name="notes" placeholder="Ex.: cliente pediu coleta pela manhã, ligar antes de ir..."></textarea></label>
     <label class="field span-2"><span>Observação interna</span><textarea name="internal_notes" placeholder="Informação interna, não exibida ao motorista"></textarea></label>
   </div><div class="form-actions"><button type="button" class="btn ghost modal-close">Cancelar</button><button class="btn primary">Enviar solicitação</button></div></form>`);
+  const form=$('#requestForm'), fields=$('#pickupFields');
+  function syncPickup() {
+    const selected=state.pevs.find(p=>String(p.id)===form.elements.pev_id.value);
+    fields.hidden=fields.disabled=!selected?.requires_pickup_address;
+    for(const input of fields.querySelectorAll('input')) input.value='';
+  }
+  form.elements.pev_id.addEventListener('change',syncPickup);
+  syncPickup();
   $('#requestForm').onsubmit=async e=>{e.preventDefault();const form=e.target;try{await api('/api/requests',{method:'POST',body:Object.fromEntries(new FormData(form))});form.reset();$('#modal').close();toast('Solicitação enviada. Os dados temporários foram limpos.','success');go('requests');}catch(err){toast(err.message,'error');}};
 }
 
@@ -575,6 +592,7 @@ function normalizeServiceType(value) {
 }
 
 function plannerStopPevId(stop) {
+  if(stop?.request_id && (stop.pev||stop).pickup_address) return -Number(stop.request_id);
   return Number((stop?.pev||stop)?.id??stop?.pev_id??0);
 }
 
@@ -597,8 +615,15 @@ async function renderPlanner() {
   await Promise.all([api('/api/pevs').then(x=>state.pevs=x.items), api('/api/drivers').then(x=>state.drivers=x.items)]);
   state.routePreview = null;
   const selectedRequests=state.requestSelection||[];
-  const preselectedIds=[...new Set(selectedRequests.map(r=>r.pev_id))];
-  const requestByPev=Object.fromEntries(selectedRequests.map(r=>[r.pev_id,r]));
+  // A pickup belongs to the request. Negative local keys keep two pickups at one PEV independent.
+  const requestByPev=Object.fromEntries(selectedRequests.map(r=>[r.pickup_address?-r.id:r.pev_id,r]));
+  const preselectedIds=Object.keys(requestByPev).map(Number);
+  const plannerRows=state.pevs.flatMap(p=>{
+    const pickups=selectedRequests.filter(r=>r.pev_id===p.id && r.pickup_address);
+    const rows=pickups.map(r=>({...p,...r.pickup_address,id:-r.id}));
+    if(!pickups.length || requestByPev[p.id]) rows.push(p);
+    return rows;
+  });
   const today = selectedRequests.length ? selectedRequests.map(r=>r.requested_date).sort()[0] : new Date().toISOString().slice(0,10);
   $('#page').innerHTML = `
     <div class="page-head"><div><span class="eyebrow">Planejamento</span><h1>Nova rota</h1><p class="muted">Selecione os PEVs, otimize, revise e só depois libere ao motorista.</p></div></div>
@@ -624,7 +649,7 @@ async function renderPlanner() {
   state.plannerPriorities = {};
   state.plannerServiceTypes = {};
   state.plannerExactTimes = {};
-  state.pevs.forEach(p=>{
+  plannerRows.forEach(p=>{
     const rq=requestByPev[p.id];
     state.plannerPriorities[p.id]=rq?.priority||p.default_priority||'normal';
     state.plannerServiceTypes[p.id]=p.drum_installed?'collection':'delivery';
@@ -637,8 +662,8 @@ async function renderPlanner() {
   }
   function drawSelector(){
     const q=$('#selectSearch').value.toLowerCase();
-    const selected=state.pevs.filter(p=>state.plannerSelection.has(p.id));
-    const items=state.pevs.filter(p=>!state.plannerSelection.has(p.id)&&(!favOnly||p.favorite)&&`${p.name} ${p.city} ${p.district}`.toLowerCase().includes(q));
+    const selected=plannerRows.filter(p=>state.plannerSelection.has(p.id));
+    const items=plannerRows.filter(p=>!state.plannerSelection.has(p.id)&&(!favOnly||p.favorite)&&`${p.name} ${p.city} ${p.district}`.toLowerCase().includes(q));
     const row=p=>`<div class="pev-check"><input type="checkbox" data-id="${p.id}" ${state.plannerSelection.has(p.id)?'checked':''}><div class="pev-check-main"><div class="name">${p.favorite?'★ ':''}${esc(p.name)}</div><div class="addr">${esc(p.street)}, ${esc(p.number||'s/n')} • ${esc(p.city)}/${esc(p.state)}</div></div><label class="planner-control"><span>Atendimento</span><select class="pev-service-type" data-id="${p.id}"><option value="collection" ${state.plannerServiceTypes[p.id]==='collection'?'selected':''}>Coleta</option><option value="delivery" ${state.plannerServiceTypes[p.id]==='delivery'?'selected':''}>Entrega</option></select></label><label class="planner-control"><span>Horário</span><input class="pev-exact-time" data-id="${p.id}" type="time" value="${esc(state.plannerExactTimes[p.id]||'')}"></label><label class="planner-control"><span>Prioridade</span><select class="pev-priority" data-id="${p.id}">${priorityOptions(state.plannerPriorities[p.id]||requestByPev[p.id]?.priority||p.default_priority)}</select></label></div>`;
     $('#selectedPevs').innerHTML=selected.length?`<div class="selected-pevs-heading">Selecionados <span>${selected.length}</span></div>${selected.map(row).join('')}`:'';
     $('#pevSelector').innerHTML=items.map(row).join('')||'<div class="empty">Nenhum outro PEV neste filtro.</div>';
@@ -663,15 +688,15 @@ async function renderPlanner() {
 async function optimizePlanner(mode) {
   const selected=[...(state.plannerSelection||new Set())];
   if(!selected.length)return toast('Selecione pelo menos um PEV.','error');
-  const priorities={};
-  selected.forEach(id=>{
-    const pev=state.pevs.find(p=>p.id===id);
-    const rq=(state.requestSelection||[]).find(r=>r.pev_id===id);
-    priorities[id]=state.plannerPriorities?.[id]||rq?.priority||pev?.default_priority||'normal';
+  const stops=selected.map(key=>{
+    const rq=(state.requestSelection||[]).find(r=>(r.pickup_address?-r.id:r.pev_id)===key);
+    return {pev_id:rq?.pev_id??key,request_id:rq?.id||null,priority:state.plannerPriorities[key]||'normal',
+      service_type:normalizeServiceType(state.plannerServiceTypes[key]),window_start:rq?.window_start||'',
+      window_end:rq?.window_end||'',exact_time:state.plannerExactTimes[key]||rq?.exact_time||''};
   });
   $('#routePreview').innerHTML='<div class="empty">Calculando sequência...</div>';
   try {
-    const data=await api('/api/optimize',{method:'POST',body:{pev_ids:selected,mode,start_time:$('#routeStartTime').value,service_minutes:Number($('#routeServiceMinutes').value),stops:selected.map(id=>{const rq=(state.requestSelection||[]).find(r=>r.pev_id===id);return {pev_id:id,request_id:rq?.id||null,priority:priorities[id]||'normal',service_type:normalizeServiceType(state.plannerServiceTypes?.[id]),window_start:rq?.window_start||'',window_end:rq?.window_end||'',exact_time:state.plannerExactTimes?.[id]||rq?.exact_time||''};})}});
+    const data=await api('/api/optimize',{method:'POST',body:{pev_ids:stops.map(s=>s.pev_id),stops,mode,start_time:$('#routeStartTime').value,service_minutes:Number($('#routeServiceMinutes').value)}});
     state.routePreview=data; drawRoutePreview();
   } catch(e){$('#routePreview').innerHTML=`<div class="warning">${esc(e.message)}</div>`;}
 }
@@ -680,7 +705,7 @@ function drawRoutePreview(){
   const d=state.routePreview; if(!d)return;
   $('#routePreview').innerHTML=`
     <div class="summary-strip"><div class="summary-box"><span>Distância</span><strong>${fmtKm(d.total_distance_m)}</strong></div><div class="summary-box"><span>Deslocamento</span><strong>${fmtDuration(d.total_duration_s)}</strong></div><div class="summary-box"><span>Paradas</span><strong>${d.stops.length}</strong></div></div>
-    <div class="route-preview">${d.stops.map(s=>`<div class="route-stop"><div class="stop-number">${s.sequence}</div><div><strong>${esc((s.pev||s).name)}</strong><div class="stop-meta">${fmtKm(s.distance_m)} • ${fmtDuration(s.duration_s)} • ${esc((s.pev||s).city)}/${esc((s.pev||s).state)}<br><strong>${esc(serviceTypeLabel[s.service_type||'collection'])}</strong>${s.exact_time?` • Horário: ${esc(s.exact_time)}`:''}</div></div><span class="badge ${s.priority}">${priorityLabel[s.priority]}</span></div>`).join('')}</div>
+    <div class="route-preview">${d.stops.map(s=>`<div class="route-stop"><div class="stop-number">${s.sequence}</div><div><strong>${esc((s.pev||s).name)}</strong><div class="stop-meta">${(s.pev||s).pickup_address?`${esc((s.pev||s).street)}, ${esc((s.pev||s).number)}<br>`:''}${fmtKm(s.distance_m)} • ${fmtDuration(s.duration_s)} • ${esc((s.pev||s).city)}/${esc((s.pev||s).state)}<br><strong>${esc(serviceTypeLabel[s.service_type||'collection'])}</strong>${s.exact_time?` • Horário: ${esc(s.exact_time)}`:''}</div></div><span class="badge ${s.priority}">${priorityLabel[s.priority]}</span></div>`).join('')}</div>
     ${d.schedule_warnings?.length?`<div class="warning">${d.schedule_warnings.map(esc).join('<br>')}</div>`:''}
     <div class="info">${d.unconfirmed_pevs?.length?`Confirme a entrada dos locais sem coordenada validada: ${d.unconfirmed_pevs.map(esc).join(', ')}.`:'Sequência calculada pelas ruas. O motorista pode ajustar as paradas pendentes durante a execução.'}</div>
     <div class="form-actions"><button id="saveDraft" class="btn primary">Criar rota</button></div>`;
@@ -690,8 +715,8 @@ function drawRoutePreview(){
 async function saveDraft(){
   const driver_id=$('#routeDriver').value; if(!driver_id)return toast('Selecione o motorista.','error');
   const d=state.routePreview;
-  const reqs=state.requestSelection||[]; const reqByPev=Object.fromEntries(reqs.map(r=>[r.pev_id,r]));
-  const body={name:$('#routeName').value,route_date:$('#routeDate').value,driver_id,total_distance_m:d.total_distance_m,total_duration_s:d.total_duration_s,request_ids:reqs.map(r=>r.id),stops:d.stops.map(s=>{const p=s.pev||s;const rq=reqByPev[p.id];return {pev_id:p.id,request_id:rq?.id||s.request_id||null,priority:s.priority,service_type:plannerServiceTypeForStop(s),distance_m:s.distance_m,duration_s:s.duration_s,window_start:rq?.window_start||'',window_end:rq?.window_end||'',exact_time:s.exact_time||state.plannerExactTimes?.[p.id]||rq?.exact_time||''};})};
+  const reqs=state.requestSelection||[]; const reqById=Object.fromEntries(reqs.map(r=>[r.id,r]));
+  const body={name:$('#routeName').value,route_date:$('#routeDate').value,driver_id,total_distance_m:d.total_distance_m,total_duration_s:d.total_duration_s,stops:d.stops.map(s=>{const p=s.pev||s;const rq=reqById[s.request_id];return {pev_id:p.id,request_id:rq?.id||s.request_id||null,priority:s.priority,service_type:plannerServiceTypeForStop(s),distance_m:s.distance_m,duration_s:s.duration_s,window_start:rq?.window_start||'',window_end:rq?.window_end||'',exact_time:s.exact_time||state.plannerExactTimes?.[p.id]||rq?.exact_time||''};})};
   const button=$('#saveDraft');if(button){button.disabled=true;button.textContent='Criando...';}
   try { const route=await api('/api/routes',{method:'POST',body}); state.requestSelection=[]; toast('Rota salva como rascunho. Solicitações vinculadas à rota.','success'); openRoute(route.id); } catch(e){toast(e.message,'error');} finally {if(button){button.disabled=false;button.textContent='Criar rota';}}
 }

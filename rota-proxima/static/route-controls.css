@@ -30,3 +30,10 @@
 .driver-contact-compact .driver-contact-whatsapp { min-height: 32px; padding: 4px 8px; }
 .driver-sequence-card .timeline-item > div:nth-last-child(2) { min-width: 0; flex: 1; }
 @media(max-width:600px){ .route-stop.route-reorder-row { grid-template-columns: 32px 28px minmax(0,1fr); } .route-stop.route-reorder-row > .badge { grid-column: 3; justify-self: start; } }
+
+.pickup-fields { margin:0; min-width:0; padding:12px 16px 16px; border:1px solid #bedcd2; border-radius:12px; background:#f2f9f6; }
+.pickup-fields[hidden] { display:none; }
+.pickup-fields legend { padding:0 6px; font-weight:750; color:#165f4c; }
+.pickup-fields p { margin:0 0 12px; color:#405e54; font-size:.88rem; }
+.pickup-inputs { display:grid; grid-template-columns:minmax(100px,1fr) minmax(140px,2fr) minmax(85px,.8fr); gap:12px; }
+@media(max-width:600px){ .pickup-inputs { grid-template-columns:minmax(0,1fr); gap:8px; } }

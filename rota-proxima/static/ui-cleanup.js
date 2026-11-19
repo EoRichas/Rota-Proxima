@@ -103,7 +103,7 @@
     if (!selector || typeof state === 'undefined') return;
 
     const selectedRequests = state.requestSelection || [];
-    const requestByPev = new Map(selectedRequests.map(r => [Number(r.pev_id), r]));
+    const requestByPev = new Map(selectedRequests.map(r => [Number(r.pickup_address?-r.id:r.pev_id), r]));
 
     [...selector.querySelectorAll('.pev-check'),...(selected?.querySelectorAll('.pev-check')||[])].forEach(row => {
       const service = row.querySelector('.pev-service-type');
