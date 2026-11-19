@@ -35,3 +35,41 @@ test('somente Admin pode liberar erros esgotados para nova tentativa',async()=>{
 test('confirmação de sincronização aceita serviço e nega outro motorista',async()=>{
  const db=await database();try{await actor(db,3);await assert.rejects(db.query("select public.update_own_evidence_sync(1,'synced')"),/permissão/);await db.exec('reset role');await actor(db,null,'service_role');await db.query("select public.update_own_evidence_sync(1,'synced','remote-id')");await db.exec('reset role');assert.equal((await db.query('select sharepoint_status from route_evidences')).rows[0].sharepoint_status,'synced');}finally{await db.close();}
 });
+
+test('endereço exigido apenas na Meta; duas solicitações mantêm paradas e históricos distintos',async()=>{
+ const db=await database();
+ try{
+  await db.exec(`alter table pevs add active boolean default true, add deleted_at timestamptz;
+    insert into pevs(id,name) values (88,'Meta Reciclagem'),(89,'Meta Reciclagem Filial');
+    create table scheduling_requests(id bigint primary key,pev_id bigint references pevs);
+    alter table route_evidences add stop_id bigint, add evidence_type text;
+    create function private.current_app_role() returns text language sql as $$select public.current_app_role()$$;
+    alter table route_stops add service_type text default 'collection', add request_id bigint references scheduling_requests on delete set null;
+    insert into scheduling_requests values (1,88);`);
+  await db.exec(fs.readFileSync(new URL('../supabase/migrations/20261119171426_meta_pickup_address.sql',import.meta.url),'utf8'));
+  await db.exec("update pevs set name='Meta (renomeada)' where id=88");
+  await assert.rejects(db.exec("insert into scheduling_requests(id,pev_id) values(2,88)"),/CEP/);
+  await db.exec("insert into scheduling_requests(id,pev_id) values(2,89)");
+  const a={cep:'18000-000',street:'Rua A',number:'10',lat:-23,lng:-47};
+  await assert.rejects(db.query('update scheduling_requests set pickup_address=$1 where id=2',[a]),/cadastro/);
+  for(const [id,address] of [[3,a],[4,{...a,street:'Rua B',number:'20'}]]){
+   await db.query('insert into scheduling_requests values ($1,88,$2)',[id,address]);
+   await db.query('insert into route_stops(id,pev_id,request_id) values ($1,88,$2)',[100+id,id]);
+  }
+  await assert.rejects(db.exec('insert into route_stops(id,pev_id,request_id) values (110,89,3)'));
+  await assert.rejects(db.exec("insert into route_stops(id,pev_id) values(200,88)"),/solicitação/);
+  await assert.rejects(db.exec("insert into route_stops(id,pev_id,request_id,service_type) values(200,88,3,'delivery')"),/somente coleta/);
+  await assert.rejects(db.exec("update route_stops set service_type='delivery' where id=103"),/somente coleta/);
+  await assert.rejects(db.exec("update pevs set drum_installed=true where id=88"));
+  await db.exec("create trigger check_driver_photos before update of status on route_stops for each row execute function private.require_driver_stop_photos()");
+  await actor(db,2);
+  await assert.rejects(db.exec("update route_stops set status='completed' where id=103"),/foto do local/);
+  await db.exec("insert into route_evidences(id,stop_id,evidence_type) values(8,103,'stop_location'),(9,2,'stop_location')");
+  await db.exec("update route_stops set status='completed' where id=103");
+  await assert.rejects(db.exec("update route_stops set status='completed' where id=2"),/foto do tambor/);
+  await db.exec('reset role');
+  assert.equal((await db.query('select drum_installed from pevs where id=88')).rows[0].drum_installed,false);
+  await db.exec('delete from scheduling_requests where id=3');
+  assert.deepEqual((await db.query("select pickup_address->>'street' as street from route_stops where id in (103,104) order by id")).rows,[{street:'Rua A'},{street:'Rua B'}]);
+ }finally{await db.close();}
+});

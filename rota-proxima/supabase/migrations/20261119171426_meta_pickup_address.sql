@@ -1,0 +1,109 @@
+-- Resolve one existing active PEV once. The generated flag cannot be changed by
+-- editing a PEV or by creating a namesake. With no match all flags remain false.
+do $$
+declare target_id bigint := (select id from public.pevs
+  where lower(btrim(name)) = 'meta reciclagem' and active and deleted_at is null);
+begin
+  execute format('alter table public.pevs add column requires_pickup_address boolean
+    generated always as (coalesce(id = %L::bigint, false)) stored', target_id);
+end $$;
+
+alter table public.scheduling_requests add column pickup_address jsonb;
+alter table public.route_stops add column pickup_address jsonb;
+
+create function private.check_request_pickup() returns trigger
+language plpgsql security invoker set search_path = '' as $$
+declare needs_address boolean; a jsonb := new.pickup_address;
+begin
+  select requires_pickup_address into strict needs_address from public.pevs where id = new.pev_id;
+  if needs_address and (a is null or jsonb_typeof(a) <> 'object'
+     or coalesce(a->>'cep','') !~ '^[0-9]{5}-?[0-9]{3}$'
+     or length(btrim(coalesce(a->>'street',''))) not between 1 and 160
+     or length(btrim(coalesce(a->>'number',''))) not between 1 and 20) then
+    raise exception 'Informe CEP, rua e número da coleta.';
+  elsif not needs_address and a is not null then
+    raise exception 'Esta PEV usa o endereço do cadastro.';
+  end if;
+  return new;
+end $$;
+create trigger check_request_pickup before insert or update of pev_id,pickup_address
+on public.scheduling_requests for each row execute function private.check_request_pickup();
+
+-- The driver can read the stop under its existing RLS, even if the request is
+-- not visible to that role or is subsequently deleted by an administrator.
+create function private.snapshot_stop_pickup() returns trigger
+language plpgsql security invoker set search_path = '' as $$
+begin
+  new.pickup_address := null;
+  if new.request_id is not null then
+    select r.pickup_address into strict new.pickup_address from public.scheduling_requests r
+    where r.id = new.request_id and r.pev_id = new.pev_id;
+    if new.pickup_address is not null and
+       (jsonb_typeof(new.pickup_address->'lat') is distinct from 'number' or
+        jsonb_typeof(new.pickup_address->'lng') is distinct from 'number') then
+      raise exception 'Calcule a rota para localizar o endereço desta coleta.';
+    end if;
+  end if;
+  if exists(select 1 from public.pevs where id=new.pev_id and requires_pickup_address) then
+    if new.pickup_address is null then
+      raise exception 'Selecione uma solicitação da Meta com endereço de coleta.';
+    end if;
+    if new.service_type is distinct from 'collection' then
+      raise exception 'A Meta Reciclagem aceita somente coleta.';
+    end if;
+  end if;
+  return new;
+end $$;
+create trigger snapshot_stop_pickup before insert on public.route_stops
+for each row execute function private.snapshot_stop_pickup();
+
+revoke all on function private.check_request_pickup(), private.snapshot_stop_pickup() from public;
+update public.pevs set drum_installed=false where requires_pickup_address;
+alter table public.pevs add constraint pickup_pev_no_drum check(not requires_pickup_address or not drum_installed);
+
+create or replace function private.update_drum_inventory() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+  if new.status='completed' and old.status is distinct from new.status then
+    update public.pevs set drum_installed=true where id=new.pev_id and not requires_pickup_address;
+  end if;
+  return new;
+end $$;
+
+-- Keep the existing driver/role check; only the drum photo is waived for Meta.
+create or replace function private.require_driver_stop_photos() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+  if new.status in ('completed','failed') and old.status is distinct from new.status
+     and private.current_app_role()='driver' then
+    if not exists(select 1 from public.route_evidences where stop_id=new.id and evidence_type='stop_location') then
+      raise exception 'A foto do local é obrigatória.' using errcode='check_violation';
+    end if;
+    if not exists(select 1 from public.pevs where id=new.pev_id and requires_pickup_address)
+       and not exists(select 1 from public.route_evidences where stop_id=new.id and evidence_type='drum') then
+      raise exception 'A foto do tambor é obrigatória.' using errcode='check_violation';
+    end if;
+  end if;
+  return new;
+end $$;
+revoke all on function private.require_driver_stop_photos() from public,anon,authenticated;
+
+-- Changes of service type must obey the same rule after the stop is created.
+create function private.guard_pickup_stop_edit() returns trigger
+language plpgsql security invoker set search_path='' as $$
+begin
+  if (new.pev_id is distinct from old.pev_id or new.pickup_address is distinct from old.pickup_address
+       or (new.request_id is not null and new.request_id is distinct from old.request_id))
+     and exists(select 1 from public.pevs where id in(old.pev_id,new.pev_id) and requires_pickup_address) then
+    raise exception 'Não é possível alterar a origem do endereço da parada.';
+  end if;
+  if new.service_type is distinct from old.service_type and new.service_type is distinct from 'collection'
+     and exists(select 1 from public.pevs where id=new.pev_id and requires_pickup_address) then
+    raise exception 'A Meta Reciclagem aceita somente coleta.';
+  end if;
+  return new;
+end $$;
+revoke all on function private.guard_pickup_stop_edit() from public;
+create trigger guard_pickup_stop_edit before update of pev_id,request_id,pickup_address,service_type
+on public.route_stops for each row execute function private.guard_pickup_stop_edit();
+notify pgrst, 'reload schema';

@@ -256,7 +256,7 @@ def optimize_order_with_exact_times(dist,durations,priorities,exact_times,start_
 def commercial_agenda_items(token, commercial_id, date_from, date_to):
     """Agenda pela data da rota e pela carteira atual, não pelo solicitante."""
     params = {
-        'select': 'id,sequence,status,service_type,exact_time,window_start,window_end,'
+        'select': 'id,sequence,status,pickup_address,service_type,exact_time,window_start,window_end,'
                   'pevs!inner(id,name,city,state,commercial_owner_id),'
                   'routes!inner(id,name,route_date,status)',
         'pevs.commercial_owner_id': f'eq.{commercial_id}',
@@ -270,7 +270,7 @@ def commercial_agenda_items(token, commercial_id, date_from, date_to):
     while True:
         rows = Supa.get('route_stops', token, {**params, 'offset': str(offset)}) or []
         for stop in rows:
-            pev, route = stop.get('pevs') or {}, stop.get('routes') or {}
+            pev, route = at_pickup(stop.get('pevs') or {}, stop.get('pickup_address')), stop.get('routes') or {}
             # Defesa adicional: a carteira é sempre definida pelo usuário autenticado.
             if str(pev.get('commercial_owner_id')) != str(commercial_id):
                 continue
@@ -308,7 +308,7 @@ def collection_report_items(token,date_from,date_to):
         ids=','.join(str(x) for x in route_ids[start:start+100])
         stops.extend(Supa.get('route_stops',token,{
             'route_id':f'in.({ids})',
-            'select':'id,route_id,pev_id,request_id,sequence,status,service_type,exact_time,arrived_at,completed_at,failure_reason,driver_note,collected_weight_kg,pevs(name,street,number,district,city,state,cep,contact_name,phone,commercial_owner_id,profiles!pevs_commercial_owner_id_fkey(id,name)),scheduling_requests(requested_by,profiles!scheduling_requests_requested_by_fkey(name))',
+            'select':'id,route_id,pev_id,pickup_address,request_id,sequence,status,service_type,exact_time,arrived_at,completed_at,failure_reason,driver_note,collected_weight_kg,pevs(name,street,number,district,city,state,cep,contact_name,phone,commercial_owner_id,profiles!pevs_commercial_owner_id_fkey(id,name)),scheduling_requests(requested_by,profiles!scheduling_requests_requested_by_fkey(name))',
             'order':'route_id.desc,sequence.asc'
         }) or [])
         weighing_rows.extend(Supa.get('route_weighings',token,{'route_id':f'in.({ids})','select':'stop_id,weight_kg'}) or [])
@@ -316,7 +316,7 @@ def collection_report_items(token,date_from,date_to):
     items=[]
     for st in stops:
         st['collected_weight_kg']=weight_by_stop.get(int(st['id']),st.get('collected_weight_kg'))
-        r=route_map.get(int(st['route_id'])) or {};drv=r.get('profiles') or {};pev=st.pop('pevs',{}) or {};req=st.pop('scheduling_requests',{}) or {};requester=req.get('profiles') or {};owner=pev.pop('profiles',{}) or {}
+        r=route_map.get(int(st['route_id'])) or {};drv=r.get('profiles') or {};pev=at_pickup(st.pop('pevs',{}) or {},st.get('pickup_address'));req=st.pop('scheduling_requests',{}) or {};requester=req.get('profiles') or {};owner=pev.pop('profiles',{}) or {}
         items.append({
             **st,'route_name':r.get('name',''),'route_date':r.get('route_date'),'route_status':r.get('status'),
             'driver_id':r.get('driver_id'),'driver_name':drv.get('name',''),
@@ -717,7 +717,7 @@ def route_waiting_for_production(route):
 def production_weighing_items(token):
     rows=Supa.get('route_stops',token,{
         'status':'eq.completed','service_type':'eq.collection',
-        'select':'id,route_id,pev_id,sequence,completed_at,service_type,pevs(name,street,number,district,city,state),routes!inner(id,name,route_date,status)',
+        'select':'id,route_id,pev_id,pickup_address,sequence,completed_at,service_type,pevs(name,street,number,district,city,state),routes!inner(id,name,route_date,status)',
         'order':'route_id.asc,sequence.asc'
     }) or []
     items=[]
@@ -725,7 +725,7 @@ def production_weighing_items(token):
         # Defesa adicional: mesmo que a consulta ou a policy seja alterada no
         # futuro, uma Entrega nunca pode atravessar a fronteira da Produção.
         if row.get('service_type')!='collection':continue
-        route=row.pop('routes',{}) or {};pev=row.pop('pevs',{}) or {}
+        route=row.pop('routes',{}) or {};pev=at_pickup(row.pop('pevs',{}) or {},row.get('pickup_address'))
         items.append({
             'stop_id':row.get('id'),'route_id':row.get('route_id'),'pev_id':row.get('pev_id'),'sequence':row.get('sequence'),'completed_at':row.get('completed_at'),
             'service_type':row.get('service_type'),
@@ -774,6 +774,129 @@ def ensure_pev_coords(token,pev):
     if pev.get('lat') is not None and pev.get('lng') is not None:return float(pev['lat']),float(pev['lng'])
     r=geocode_pev_and_persist(token,pev);return r['lat'],r['lng']
 
+def pickup_for_request(pev, data):
+    fields = ('pickup_cep', 'pickup_street', 'pickup_number')
+    if not pev.get('requires_pickup_address'):
+        if any(data.get(k) for k in (*fields,'pickup_phone','pickup_contact_name','pickup_whatsapp')):
+            raise ValueError('Esta PEV usa o endereço do cadastro.')
+        return None
+    cep, street, number = (str(data.get(k) or '').strip() for k in fields)
+    if not re.fullmatch(r'[0-9]{5}-?[0-9]{3}', cep):
+        raise ValueError('Informe um CEP de coleta com oito dígitos.')
+    if not street or len(street) > 160 or not number or len(number) > 20:
+        raise ValueError('Informe a rua e o número da coleta (ou s/n).')
+    phone = str(data.get('pickup_phone') or '').strip()
+    name = str(data.get('pickup_contact_name') or '').strip()
+    whatsapp = data.get('pickup_whatsapp') in ('1', True)
+    if len(name)>100:
+        raise ValueError('O nome do responsável deve ter até 100 caracteres.')
+    if phone and (len(phone)>24 or not re.fullmatch(r'[+0-9() .-]+',phone)
+                  or not re.fullmatch(r'(?:55)?[1-9][0-9]{9,10}',re.sub(r'[^0-9]','',phone))):
+        raise ValueError('Informe um telefone do responsável com DDD.')
+    if whatsapp and not phone:
+        raise ValueError('Informe o telefone para habilitar o WhatsApp.')
+    try:
+        postal = viacep_lookup(cep)
+    except requests.RequestException as exc:
+        raise ValueError('Não foi possível consultar o CEP agora. Tente enviar novamente.') from exc
+    return {'contact_name':name,'phone':phone,'whatsapp':whatsapp,'cep': postal['cep'], 'street': street, 'number': number,
+            'city': postal['city'], 'state': postal['state'], 'district': postal.get('district') or ''}
+
+
+def pickup_history(token, user, pev_id):
+    # RLS is preserved; scope explicitly to the commercial portfolio / driver's routes too.
+    criteria = {'pevs.requires_pickup_address': 'eq.true',
+        'or': '(arrived_at.not.is.null,and(status.eq.completed,completed_lat.not.is.null))',
+        'select': 'id,arrived_at,completed_at,arrived_lat,arrived_lng,pickup_address,pevs!inner(id)',
+        'order': 'id.desc'}
+    if pev_id is not None:criteria['pev_id']=f'eq.{pev_id}'
+    if user['role'] == 'commercial':
+        criteria['pevs.commercial_owner_id'] = f'eq.{user["id"]}'
+    elif user['role'] == 'driver':
+        criteria['select'] += ',routes!inner(id)'
+        criteria['routes.driver_id'] = f'eq.{user["id"]}'
+    else:
+        raise ValueError('Sem permissão')
+    rows = Supa.get('route_stops', token, criteria)
+    seen, items = set(), []
+    for row in sorted(rows, key=lambda r:r.get('arrived_at') or r.get('completed_at') or '', reverse=True):
+        address = row.get('pickup_address') or {}
+        if address:
+            key = (clean_cep(address.get('cep')),str(address.get('street')).strip().casefold(),str(address.get('number')).strip().casefold())
+            place = {k: address.get(k) for k in ('cep','street','number','district','city','state','lat','lng','contact_name','phone','whatsapp')}
+        elif row.get('arrived_lat') is not None and row.get('arrived_lng') is not None:
+            # Legacy: GPS at arrival is known; the address at the time is not.
+            key = (round(row['arrived_lat'],5),round(row['arrived_lng'],5))
+            place = {'lat':row['arrived_lat'], 'lng':row['arrived_lng']}
+        else:
+            continue
+        if key not in seen:
+            seen.add(key)
+            items.append({**place,'visited_at': row.get('arrived_at') or row.get('completed_at')})
+        if len(items)==30:break
+    return items
+
+
+def at_pickup(pev, address):
+    if not address and not pev.get('requires_pickup_address'):
+        return pev
+    address = address or {}
+    # Never inherit a fixed entrance, complement or coordinates from the PEV.
+    return {**pev, **{k: address.get(k) for k in
+            ('street','number','district','city','state','cep','complement','lat','lng')},
+            'contact_name':address.get('contact_name'), 'contact_role':None,
+            'phone':address.get('phone'), 'whatsapp':address.get('whatsapp') is True,
+            'location_confirmed': False, 'pickup_address': address}
+
+
+def planning_locations(token, ids, stops):
+    """Keep request identity even when two stops share one PEV."""
+    pevs = Supa.get('pevs', token, {'id': 'in.('+','.join(map(str,set(ids)))+')', 'select': '*'})
+    by_id = {p['id']: p for p in pevs}
+    if not stops:
+        stops = [{'pev_id': pid} for pid in ids]
+    if sorted(int(s['pev_id']) for s in stops) != sorted(ids):
+        raise ValueError('Seleção de paradas inconsistente.')
+    request_ids = {int(s['request_id']) for s in stops if s.get('request_id')}
+    requests_by_id = {}
+    if request_ids:
+        rows = Supa.get('scheduling_requests', token, {
+            'id': 'in.('+','.join(map(str,request_ids))+')', 'status': 'eq.pending',
+            'select': 'id,pev_id,pickup_address'})
+        requests_by_id = {r['id']: r for r in rows}
+    items, points = [], []
+    for stop in stops:
+        pid = int(stop['pev_id'])
+        if pid not in by_id:
+            raise ValueError('PEV não disponível para planejamento.')
+        pev = by_id[pid]
+        if pev.get('requires_pickup_address'):
+            if not (requests_by_id.get(int(stop.get('request_id') or 0)) or {}).get('pickup_address'):
+                raise ValueError('Para a Meta, selecione uma solicitação com endereço de coleta.')
+            if stop.get('service_type') not in (None,'','collection'):
+                raise ValueError('A Meta Reciclagem aceita somente coleta.')
+        if stop.get('request_id'):
+            req = requests_by_id.get(int(stop['request_id']))
+            if not req or req['pev_id'] != pid:
+                raise ValueError('Solicitação indisponível para esta PEV. Atualize a lista.')
+            address = req.get('pickup_address')
+            if address:
+                if address.get('lat') is None or address.get('lng') is None:
+                    try:
+                        geo = geocode_address_detailed(address)
+                    except ValueError as exc:
+                        raise ValueError('Não foi possível localizar o endereço da solicitação de coleta no mapa.') from exc
+                    address = {**address, 'lat': geo['lat'], 'lng': geo['lng'], 'geo_source': geo.get('source')}
+                    updated = Supa.update('scheduling_requests', token,
+                        {'id': f'eq.{req["id"]}', 'status': 'eq.pending'}, {'pickup_address': address})
+                    if not updated:
+                        raise ValueError('A solicitação mudou. Atualize a lista.')
+                pev = at_pickup(pev, address)
+        items.append(pev)
+        points.append(ensure_pev_coords(token, pev))
+    return stops, items, points
+
+
 def settings_origin(token):
     s=first(Supa.get('settings',token,{'id':'eq.1','select':'*'}))
     if not s:raise ValueError('Configure o ponto de saída')
@@ -804,8 +927,8 @@ def get_route_full(token,route_id):
     o=out.get('origin_json') or {};out['origin']=o
     mapped=[]
     for s in stops:
-        p=s.pop('pevs',{}) or {};rq=s.pop('scheduling_requests',{}) or {}
-        x={**s,'pev_name':p.get('name'),'street':p.get('street'),'number':p.get('number'),'complement':p.get('complement'),'district':p.get('district'),'city':p.get('city'),'state':p.get('state'),'cep':p.get('cep'),'lat':p.get('lat'),'lng':p.get('lng'),'location_confirmed':p.get('location_confirmed'),'contact_name':p.get('contact_name'),'contact_role':p.get('contact_role'),'phone':p.get('phone'),'whatsapp':p.get('whatsapp'),'notes':rq.get('notes') or '','window_start':s.get('window_start') or rq.get('window_start') or '','window_end':s.get('window_end') or rq.get('window_end') or '','exact_time':s.get('exact_time') or rq.get('exact_time') or ''}
+        p=at_pickup(s.pop('pevs',{}) or {},s.get('pickup_address'));rq=s.pop('scheduling_requests',{}) or {}
+        x={**s,'requires_pickup_address':bool(p.get('requires_pickup_address')),'pev_name':p.get('name'),'street':p.get('street'),'number':p.get('number'),'complement':p.get('complement'),'district':p.get('district'),'city':p.get('city'),'state':p.get('state'),'cep':p.get('cep'),'lat':p.get('lat'),'lng':p.get('lng'),'location_confirmed':p.get('location_confirmed'),'contact_name':p.get('contact_name'),'contact_role':p.get('contact_role'),'phone':p.get('phone'),'whatsapp':p.get('whatsapp'),'notes':rq.get('notes') or '','window_start':s.get('window_start') or rq.get('window_start') or '','window_end':s.get('window_end') or rq.get('window_end') or '','exact_time':s.get('exact_time') or rq.get('exact_time') or ''}
         mapped.append(x)
     out['stops']=mapped;out['weighings']=route_weighings(token,route_id);out['evidences']=route_evidences(token,route_id);loc=Supa.get('driver_location_updates',token,{'route_id':f'eq.{route_id}','select':'lat,lng,accuracy_m,recorded_at','order':'recorded_at.desc','limit':'1'}) or [];out['last_location']=loc[0] if loc else None;out['schedule_warnings']=schedule_conflicts(mapped);out['timeline']=route_timeline(token,out);return out
 
@@ -840,6 +963,8 @@ def reorder_route_for_exact_times(token,route_id,start_lat=None,start_lng=None,l
     for s in pending:
         if s.get('lat') is not None and s.get('lng') is not None:
             points.append((float(s['lat']),float(s['lng'])))
+        elif s.get('requires_pickup_address'):
+            raise ValueError('A parada da Meta não tem endereço de coleta registrado.')
         else:
             p=first(Supa.get('pevs',token,{'id':f'eq.{s["pev_id"]}','select':'*'}))
             points.append(ensure_pev_coords(token,p))
@@ -1065,6 +1190,15 @@ class AppHandler(BaseHTTPRequestHandler):
             if not u:return
             if path=='/api/presence':return self.send_json({'ok':True,'online':True,'expires_in':_USER_PRESENCE_TTL})
             t=self.token();role=u['role'];q=self.query()
+            if re.fullmatch(r'/api/pickup-history(?:/[0-9]+)?',path):
+                if role not in ('commercial','driver'):return self.send_json({'error':'Sem permissão'},403)
+                return self.send_json({'items':pickup_history(t,u,int(path.split('/')[3]) if path.count('/')==3 else None)})
+            if re.fullmatch(r'/api/pickup-postal/[0-9]{8}',path):
+                if role!='commercial':return self.send_json({'error':'Sem permissão'},403)
+                cep=path.rsplit('/',1)[1]
+                postal=viacep_lookup(cep)
+                coords=_brasilapi_cep_coords(cep)
+                return self.send_json({**postal,'lat':coords[0] if coords else None,'lng':coords[1] if coords else None})
             if path=='/api/settings':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 return self.send_json(first(Supa.get('settings',t,{'id':'eq.1','select':'*'})))
@@ -1104,7 +1238,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 else:params['status']='neq.cancelled'
                 rows=Supa.get('scheduling_requests',t,params);items=[]
                 for x in rows:
-                    p=x.pop('pevs',{}) or {};pr=x.pop('profiles',{}) or {};r=x.pop('routes',{}) or {};items.append({**x,**{k:p.get(k) for k in ['street','number','district','city','state','cep','contact_name','contact_role','phone']},'pev_name':p.get('name'),'requested_by_name':pr.get('name'),'route_name':r.get('name')})
+                    p=at_pickup(x.pop('pevs',{}) or {},x.get('pickup_address'));pr=x.pop('profiles',{}) or {};r=x.pop('routes',{}) or {};items.append({**x,**{k:p.get(k) for k in ['street','number','district','city','state','cep','contact_name','contact_role','phone']},'pev_name':p.get('name'),'requested_by_name':pr.get('name'),'route_name':r.get('name')})
                 return self.send_json({'items':items})
             if path=='/api/agenda':
                 if role!='commercial':return self.send_json({'error':'Sem permissão'},403)
@@ -1323,6 +1457,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 if role not in ('admin','commercial'):return self.send_json({'error':'Sem permissão'},403)
                 item={'pev_id':int(data.get('pev_id') or 0),'requested_by':u['id'],'requested_date':data.get('requested_date'),'window_start':data.get('window_start') or None,'window_end':data.get('window_end') or None,'exact_time':data.get('exact_time') or None,'priority':data.get('priority') or 'normal','notes':data.get('notes') or '','internal_notes':data.get('internal_notes') or '','status':'pending'}
                 if not item['pev_id'] or not item['requested_date']:return self.send_json({'error':'Informe PEV e data'},400)
+                pev=first(Supa.get('pevs',t,{'id':f'eq.{item["pev_id"]}','select':'id,requires_pickup_address','active':'eq.true','deleted_at':'is.null'}))
+                if not pev:return self.send_json({'error':'PEV indisponível'},400)
+                address=pickup_for_request(pev,data)
+                if address:item['pickup_address']=address
                 row=Supa.insert('scheduling_requests',t,item)[0];audit(t,u,'create','request',row['id'],'Solicitação criada',None,row);return self.send_json({'id':row['id']},201)
             if path.startswith('/api/requests/'):
                 rid=int(path.strip('/').split('/')[2]);old=first(Supa.get('scheduling_requests',t,{'id':f'eq.{rid}','select':'*'}));
@@ -1344,14 +1482,16 @@ class AppHandler(BaseHTTPRequestHandler):
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
                 ids=[int(x) for x in (data.get('pev_ids') or data.get('stop_ids') or [])]
                 if not ids:return self.send_json({'error':'Selecione pelo menos um PEV'},400)
-                pevs=Supa.get('pevs',t,{'id':f'in.({",".join(map(str,ids))})','select':'*'});pm={p['id']:p for p in pevs};origin=settings_origin(t);points=[(origin['lat'],origin['lng'])];items=[]
-                for pid in ids:
-                    if pid in pm:items.append(pm[pid]);points.append(ensure_pev_coords(t,pm[pid]))
-                dist,dur,source=osrm_matrix(points);meta={int(x['pev_id']):x for x in data.get('stops') or []};legacy_pri=data.get('priorities') or {};pri={i+1:meta.get(p['id'],{}).get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal') for i,p in enumerate(items)};exact={i+1:meta.get(p['id'],{}).get('exact_time') for i,p in enumerate(items) if meta.get(p['id'],{}).get('exact_time')}
-                windows={i+1:(meta.get(p['id'],{}).get('window_start'),meta.get(p['id'],{}).get('window_end')) for i,p in enumerate(items)}
+                meta,items,locations=planning_locations(t,ids,data.get('stops'))
+                origin=settings_origin(t)
+                dist,dur,source=osrm_matrix([(origin['lat'],origin['lng']),*locations])
+                legacy_pri=data.get('priorities') or {}
+                pri={i:m.get('priority') or legacy_pri.get(str(p['id'])) or p.get('default_priority','normal') for i,(p,m) in enumerate(zip(items,meta),1)}
+                exact={i:m['exact_time'] for i,m in enumerate(meta,1) if m.get('exact_time')}
+                windows={i:(m.get('window_start'),m.get('window_end')) for i,m in enumerate(meta,1)}
                 order,warnings=optimize_order_with_exact_times(dist,dur,pri,exact,hhmm_to_minutes(data.get('start_time')),data.get('mode','best'),windows,data.get('service_minutes',10));prev=0;totald=totalt=0;st=[]
                 for seq,idx in enumerate(order,1):
-                    p=items[idx-1];m=meta.get(p['id'],{});d=dist[prev][idx] or 0;du=dur[prev][idx] or 0;totald+=d;totalt+=du;prev=idx;st.append({**p,'pev':p,'pev_id':p['id'],'sequence':seq,'priority':m.get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal'),'service_type':validated_service_type(m.get('service_type')),'window_start':m.get('window_start') or '','window_end':m.get('window_end') or '','exact_time':m.get('exact_time') or '','request_id':m.get('request_id'),'distance_m':d,'duration_s':du})
+                    p=items[idx-1];m=meta[idx-1];d=dist[prev][idx] or 0;du=dur[prev][idx] or 0;totald+=d;totalt+=du;prev=idx;st.append({**p,'pev':p,'pev_id':p['id'],'sequence':seq,'priority':m.get('priority') or legacy_pri.get(str(p['id'])) or legacy_pri.get(p['id']) or p.get('default_priority','normal'),'service_type':validated_service_type(m.get('service_type')),'window_start':m.get('window_start') or '','window_end':m.get('window_end') or '','exact_time':m.get('exact_time') or '','request_id':m.get('request_id'),'distance_m':d,'duration_s':du})
                 return self.send_json({'origin':origin,'stops':st,'total_distance_m':totald,'total_duration_s':totalt,'source':source,'schedule_warnings':warnings,'unconfirmed_pevs':[p['name'] for p in items if not p.get('location_confirmed')]})
             if path=='/api/routes' and method=='POST':
                 if role!='admin':return self.send_json({'error':'Sem permissão'},403)
@@ -1419,15 +1559,17 @@ class AppHandler(BaseHTTPRequestHandler):
                     return self.send_json(result or {'ok':True})
             if path.startswith('/api/stops/') and method=='POST':
                 parts=path.strip('/').split('/');sid=int(parts[2]);action=parts[3]
-                stop=first(Supa.get('route_stops',t,{'id':f'eq.{sid}','select':'id,route_id,pev_id,status,service_type'}))
+                stop=first(Supa.get('route_stops',t,{'id':f'eq.{sid}','select':'id,route_id,pev_id,status,service_type,pevs(requires_pickup_address)'}))
                 if not stop:return self.send_json({'error':'Parada não encontrada'},404)
                 route_id=int(stop['route_id'])
+                collection_only=bool((stop.get('pevs') or {}).get('requires_pickup_address'))
                 if action=='evidence':
                     if role!='driver':return self.send_json({'error':'Sem permissão'},403)
                     if stop.get('status') not in ('pending','arrived'):return self.send_json({'error':'Esta parada já foi encerrada'},409)
                     route=first(Supa.get('routes',t,{'id':f'eq.{route_id}','select':'id,status,driver_id','limit':'1'}))
                     if not route or route.get('status')!='in_progress' or route.get('driver_id')!=u['id']:return self.send_json({'error':'Esta rota não está disponível para registrar fotos'},409)
                     evtype=str(data.get('evidence_type') or '')
+                    if evtype=='drum' and collection_only:return self.send_json({'error':'Esta coleta não usa tambor'},400)
                     if evtype not in ('stop_location','drum'):return self.send_json({'error':'Tipo de evidência inválido para esta parada'},400)
                     existing=Supa.get('route_evidences',t,{'stop_id':f'eq.{sid}','evidence_type':f'eq.{evtype}','select':'id','limit':'1'})
                     if existing:return self.send_json({'error':'Esta foto obrigatória já foi registrada'},409)
@@ -1453,7 +1595,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     present={item.get('evidence_type') for item in evidences}
                     missing=[]
                     if 'stop_location' not in present:missing.append('foto do local')
-                    if 'drum' not in present:missing.append('foto do tambor')
+                    if not collection_only and 'drum' not in present:missing.append('foto do tambor')
                     if missing:return self.send_json({'error':f'Adicione a {" e a ".join(missing)} antes de encerrar esta parada'},409)
                 result=Supa.rpc('update_stop_atomic',t,{'p_stop_id':sid,'p_action':action,'p_data':data})
                 return self.send_json(try_auto_finish_route(t,u,int(result['route_id']),data.get('lat'),data.get('lng')))
